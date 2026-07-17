@@ -1,0 +1,24 @@
+╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║                                   MailFerry v1.0.0 — IMAP Migration & Sync                                   ║
+║                                High-Performance Native IMAP Migration Engine                                 ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+CSV File       : mailboxes.csv                                                   CPU         : N/A
+State Database : /tmp/mailferry-capture-trz11_k3/m.db                            Load Avg    : 0.03 0.02 0.00
+Logs           : /tmp/mailferry-capture-trz11_k3/logs                            Memory      : 653.8 MB / 4.2 GB
+Mode           : Migration & Sync                                                Process RSS : 20.2 MB
+Workers        : 1/2                                                             Wire RX/TX  : 8.3 MB / 8.0 MB
+Runtime        : 0 day 00:00:01
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  #  Mailbox                              Status   Fldr    Msgs                Pct       Speed          Elapsed
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  1  finance                              RUNNING  4/4     1,419/1,580         92%    4.8 MB/s   0 day 00:00:01
+      INBOX                ███████████████████████████░░░  92%  MIGRATE uid 547 (2.7 KB)
+      Source      127.0.0.1 [PLAIN,UID+,LIT+] selected Sent  ↓5.1 MB
+      Destination 127.0.0.1 [PLAIN,UID+,LIT+] ready  ↑4.9 MB  pre-existing 0  new 1,419  adopted 0
+      uid 547 2.7 KB
+  2  sales                                SUCCESS  3/3     1,040/1,040        100%               0 day 00:00:01
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Done 1/2   1 ok   0 partial   0 failed
+Msgs 2,459/2,620 (94%)   Data 7.8 MB/8.2 MB (95%)   Rate 6.2 MB/s (1962.9 msg/s)   New 2,459   Adopted 0
+Reconn 0   Retries 0
+Batch ETA: 0 day 00:00:00   Finish ~21:02

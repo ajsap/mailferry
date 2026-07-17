@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# MailFerry runtime output
+logs/
+migration.db
+migration.db-wal
+migration.db-shm
+migration.state
+*.ndjson
+
+# Build artefacts
+build/
+dist/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store

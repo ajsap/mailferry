@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="932" height="500" viewBox="0 0 932 500"><rect width="100%" height="100%" rx="8" fill="#0d1117"/><text font-family="SFMono-Regular,Consolas,Liberation Mono,Menlo,monospace" font-size="13" xml:space="preserve"><tspan x="18" y="32"><tspan fill="#c9d1d9">╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+</tspan></tspan><tspan x="18" y="51"><tspan fill="#c9d1d9">║                                   MailFerry v1.0.0 — IMAP Migration &amp; Sync                                   ║
+</tspan></tspan><tspan x="18" y="70"><tspan fill="#c9d1d9">║                                High-Performance Native IMAP Migration Engine                                 ║
+</tspan></tspan><tspan x="18" y="89"><tspan fill="#c9d1d9">╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+</tspan></tspan><tspan x="18" y="108"><tspan fill="#c9d1d9">CSV File       : mailboxes.csv                                                   CPU         : N/A
+</tspan></tspan><tspan x="18" y="127"><tspan fill="#c9d1d9">State Database : /tmp/mailferry-capture-trz11_k3/m.db                            Load Avg    : 0.03 0.02 0.00
+</tspan></tspan><tspan x="18" y="146"><tspan fill="#c9d1d9">Logs           : /tmp/mailferry-capture-trz11_k3/logs                            Memory      : 653.8 MB / 4.2 GB
+</tspan></tspan><tspan x="18" y="165"><tspan fill="#c9d1d9">Mode           : Migration &amp; Sync                                                Process RSS : 20.2 MB
+</tspan></tspan><tspan x="18" y="184"><tspan fill="#c9d1d9">Workers        : 1/2                                                             Wire RX/TX  : 8.3 MB / 8.0 MB
+</tspan></tspan><tspan x="18" y="203"><tspan fill="#c9d1d9">Runtime        : 0 day 00:00:01
+</tspan></tspan><tspan x="18" y="222"><tspan fill="#c9d1d9">────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+</tspan></tspan><tspan x="18" y="241"><tspan fill="#c9d1d9">  #  Mailbox                              Status   Fldr    Msgs                Pct       Speed          Elapsed
+</tspan></tspan><tspan x="18" y="260"><tspan fill="#c9d1d9">────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+</tspan></tspan><tspan x="18" y="279"><tspan fill="#c9d1d9">  1  finance                              </tspan><tspan fill="#d29922">RUNNING </tspan><tspan fill="#c9d1d9"> 4/4     1,419/1,580         92%    4.8 MB/s   0 day 00:00:01
+</tspan></tspan><tspan x="18" y="298"><tspan fill="#c9d1d9">      INBOX                ███████████████████████████░░░  92%  </tspan><tspan fill="#39c5cf">MIGRATE uid 547 (2.7 KB)</tspan><tspan fill="#c9d1d9">
+</tspan></tspan><tspan x="18" y="317"><tspan fill="#c9d1d9">      </tspan><tspan fill="#8b949e">Source      127.0.0.1 [PLAIN,UID+,LIT+] selected Sent  ↓5.1 MB</tspan><tspan fill="#c9d1d9">
+</tspan></tspan><tspan x="18" y="336"><tspan fill="#c9d1d9">      </tspan><tspan fill="#8b949e">Destination 127.0.0.1 [PLAIN,UID+,LIT+] ready  ↑4.9 MB  pre-existing 0  new 1,419  adopted 0</tspan><tspan fill="#c9d1d9">
+</tspan></tspan><tspan x="18" y="355"><tspan fill="#c9d1d9">      </tspan><tspan fill="#8b949e">uid 547 2.7 KB</tspan><tspan fill="#c9d1d9">
+</tspan></tspan><tspan x="18" y="374"><tspan fill="#c9d1d9">  2  sales                                </tspan><tspan fill="#3fb950">SUCCESS </tspan><tspan fill="#c9d1d9"> 3/3     1,040/1,040        100%               0 day 00:00:01
+</tspan></tspan><tspan x="18" y="393"><tspan fill="#c9d1d9">────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+</tspan></tspan><tspan x="18" y="412"><tspan fill="#c9d1d9">Done 1/2   </tspan><tspan fill="#3fb950">1 ok</tspan><tspan fill="#c9d1d9">   </tspan><tspan fill="#d29922">0 partial</tspan><tspan fill="#c9d1d9">   </tspan><tspan fill="#ff7b72">0 failed</tspan><tspan fill="#c9d1d9">
+</tspan></tspan><tspan x="18" y="431"><tspan fill="#c9d1d9">Msgs 2,459/2,620 (94%)   Data 7.8 MB/8.2 MB (95%)   Rate 6.2 MB/s (1962.9 msg/s)   New 2,459   Adopted 0
+</tspan></tspan><tspan x="18" y="450"><tspan fill="#c9d1d9">Reconn 0   Retries 0
+</tspan></tspan><tspan x="18" y="469"><tspan fill="#c9d1d9">Batch ETA: 0 day 00:00:00   Finish ~21:02
+</tspan></tspan></text></svg>
