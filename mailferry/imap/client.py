@@ -147,12 +147,15 @@ class AppendHandle:
 class ImapClient:
     """One IMAP connection. All coroutines must run on one event loop."""
 
-    def __init__(self, endpoint, cfg, side=None, log=None, role="src"):
+    def __init__(self, endpoint, cfg, side=None, log=None, role="src", hub=None,
+                 owner_label: str = ""):
         self.ep = endpoint
         self.cfg = cfg
         self.side = side or _NullSide()
         self.log = log
         self.role = role
+        self.hub = hub
+        self.owner_label = owner_label
         self.caps: set = set()
         self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
@@ -462,6 +465,8 @@ class ImapClient:
             await self._starttls()
         self._reader_task = asyncio.get_event_loop().create_task(self._reader_loop())
         self._watch_task = asyncio.get_event_loop().create_task(self._watchdog())
+        if self.hub is not None:
+            self.hub.register_client(self)
 
     async def _inline_cmd(self, name: str, args: str = ""):
         """Command executed before the reader task exists (setup phase)."""
@@ -746,9 +751,9 @@ class ImapClient:
     async def noop(self):
         await self.cmd("NOOP")
 
-    async def logout(self):
+    async def logout(self, timeout: float = 5.0):
         try:
-            await asyncio.wait_for(self.cmd("LOGOUT"), timeout=10)
+            await asyncio.wait_for(self.cmd("LOGOUT"), timeout=timeout)
         except Exception:
             pass
         self.abort()
@@ -760,12 +765,29 @@ class ImapClient:
             while not self._closed:
                 await asyncio.sleep(5)
                 busy = bool(self._pending) or bool(self._body_fifo)
-                if busy and monotonic() - self._last_activity > self.cfg.timeout:
+                # A server may legitimately take a long time to acknowledge a
+                # large APPEND after the bytes have landed — give it headroom.
+                limit = self.cfg.timeout
+                if any(p.name == "APPEND" for p in self._pending.values()):
+                    limit = self.cfg.timeout * 3
+                if busy and monotonic() - self._last_activity > limit:
                     self._shutdown(ConnectionLost(
                         f"no socket activity for {int(monotonic() - self._last_activity)}s"))
                     return
         except asyncio.CancelledError:
             pass
+
+    @staticmethod
+    def _mark_retrieved(fut: asyncio.Future):
+        """Prevent 'exception was never retrieved' noise for futures whose
+        consumers have already moved on (reconnect paths, shutdown)."""
+        def _consume(f: asyncio.Future):
+            if not f.cancelled():
+                f.exception()
+        if fut.done():
+            _consume(fut)
+        else:
+            fut.add_done_callback(_consume)
 
     def _shutdown(self, exc: BaseException):
         if self._closed:
@@ -776,17 +798,21 @@ class ImapClient:
         for p in list(self._pending.values()):
             if not p.fut.done():
                 p.fut.set_exception(exc)
+            self._mark_retrieved(p.fut)
         self._pending.clear()
         for bh in list(self._body_fifo):
             bh.fail(exc)
         self._body_fifo.clear()
         if self._cont_fut and not self._cont_fut.done():
             self._cont_fut.set_exception(exc)
+            self._mark_retrieved(self._cont_fut)
         try:
             if self.writer is not None:
                 self.writer.close()
         except Exception:
             pass
+        if self.hub is not None:
+            self.hub.unregister_client(self)
         self.side.state("closed")
 
     def abort(self, exc: Optional[BaseException] = None):

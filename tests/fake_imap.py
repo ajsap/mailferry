@@ -121,6 +121,12 @@ class FakeIMAPServer:
         self._server = None
         self.append_count = 0
         self.fetch_body_count = 0
+        self.stall_after = None      # after N body fetches, stop responding (hung server)
+        self.stall_mode = "always"   # "always": every conn stalls · "once": next conn recovers
+        self.stall_count = 0         # how many times a connection entered the stall
+        self.append_reject = b""     # APPEND bodies containing this marker get tagged NO
+        self.append_kill = b""       # APPEND bodies containing this marker kill the conn
+        self.kill_count = 0          # connections killed by append_kill
 
     async def _start(self):
         self._server = await asyncio.start_server(self._client, "127.0.0.1", 0)
@@ -278,6 +284,12 @@ class FakeIMAPServer:
                                 sendb(b")\r\n")
                             elif want_body:
                                 self.fetch_body_count += 1
+                                if (self.stall_after is not None
+                                        and self.fetch_body_count > self.stall_after):
+                                    self.stall_count += 1
+                                    if self.stall_mode == "once":
+                                        self.stall_after = None   # next connection recovers
+                                    await asyncio.sleep(3600)   # hung server: never reply
                                 sendb(f"* {seq} FETCH ({' '.join(attrs)} BODY[] "
                                       f"{{{len(msg.body)}}}\r\n".encode("latin-1"))
                                 sendb(msg.body)
@@ -308,10 +320,17 @@ class FakeIMAPServer:
                         dates = re.findall(r'"((?:[^"\\]|\\.)*)"', rest)
                         date = dates[-1] if dates else "17-Jul-2026 10:00:00 +0000"
                         body = lits[0] if lits else b""
-                        msg = f.add(body, flags - {"\\Recent"}, date)
-                        self.append_count += 1
-                        send(f"{tag} OK [APPENDUID {f.uidvalidity} {msg.uid}] append done"
-                             if "UIDPLUS" in self.caps else f"{tag} OK append done")
+                        if self.append_kill and self.append_kill in body:
+                            self.kill_count += 1        # content filter RSTs the line
+                            writer.close()
+                            return
+                        if self.append_reject and self.append_reject in body:
+                            send(f"{tag} NO APPEND failed")
+                        else:
+                            msg = f.add(body, flags - {"\\Recent"}, date)
+                            self.append_count += 1
+                            send(f"{tag} OK [APPENDUID {f.uidvalidity} {msg.uid}] append done"
+                                 if "UIDPLUS" in self.caps else f"{tag} OK append done")
                 elif verb == "UNSELECT":
                     selected = None
                     send(f"{tag} OK done")
@@ -348,4 +367,8 @@ class ServerThread:
             fut.result(timeout=10)
 
     def stop(self):
-        self.loop.call_soon_threadsafe(self.loop.stop)
+        def _halt():
+            for t in asyncio.all_tasks(self.loop):
+                t.cancel()                       # silence stalled client tasks
+            self.loop.call_soon(self.loop.stop)
+        self.loop.call_soon_threadsafe(_halt)

@@ -39,6 +39,24 @@ class ConnectionLost(MFError):
     """Socket closed, reset, timed out at the transport level."""
 
 
+class StaleKick(ConnectionLost):
+    """Injected by the stale supervisor: the connection was force-closed
+    because the migration made no measurable progress. Handled exactly like
+    a connection loss (reconnect + resume from the last confirmed state)
+    but NEVER consumes the retry budget."""
+
+
+class StaleFailed(MFError):
+    """Automatic stale recovery exhausted its attempts — the mailbox is
+    marked STALE and the operator decides (retry / rerun / abort)."""
+
+
+class LeaseLost(MFError):
+    """Another worker took this mailbox over (heartbeat failover). This
+    worker must stop the mailbox immediately — never retried locally,
+    never treated as a mailbox failure."""
+
+
 class TransientError(MFError):
     """Network-shaped failure: retrying is likely to help."""
 

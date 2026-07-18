@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 SAMPLE_CSV = """oldhost,oldport,oldsecurity,olduser,oldpassword,newhost,newport,newsecurity,newuser,newpassword
-mail.old.com,993,ssl,john@old.com,Secret1,mail.new.com,993,ssl,john@new.com,Secret2
+imap.example.com,993,ssl,jane@example.com,Secret1,imap.example.org,993,ssl,jane@example.org,Secret2
 """
 
 REQUIRED_COLS = {"oldhost", "oldport", "oldsecurity", "olduser", "oldpassword",
@@ -94,6 +94,18 @@ class RunConfig:
     max_conns_per_mailbox: int = 3
     per_host_conns: int = 8
     timeout: float = 120.0                  # inactivity watchdog seconds
+    stale_timeout: float = 300.0            # no-progress stale detection (0 = off)
+    recovery_retries: int = 3               # automatic recovery attempts per stall
+    recovery_interval: float = 30.0         # spacing between recovery attempts
+    lock_timeout: float = 300.0             # legacy lease considered stale after this
+    reset_stale_locks: bool = False         # kept for compatibility (cluster reclaims)
+    worker_timeout: float = 60.0            # cluster worker offline after this silence
+    batch_attempts: int = 3                 # tries per level during failure isolation
+    reconnect_attempts: int = 5             # folder reconnects for ordinary trouble
+    isolate_failed: bool = True             # progressive poison-message isolation
+    skip_known_failed: bool = True          # honour the Failed Message Registry
+    log_keep_days: int = 30                 # prune old logs at startup (0 = keep)
+    db_heartbeat: float = 15.0              # worker/lease heartbeat interval
     compress: str = "auto"                  # auto | off
     baseline: bool = False
     tls_verify: bool = True
@@ -107,6 +119,7 @@ class RunConfig:
     no_dedup_scan: bool = False
     json_logs: bool = False
     json_progress: bool = False
+    no_tui: bool = False
     trace: bool = False
     debug: bool = False
     check_only: bool = False

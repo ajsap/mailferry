@@ -21,3 +21,14 @@ dist/
 .idea/
 .vscode/
 .DS_Store
+
+# Go
+go/dist/
+go/rc_audit.html
+go/docs_go_tui_*.png
+*.exe
+
+# Local test/dev output
+*.db
+*.log
+!docs/**/*.log

@@ -25,7 +25,7 @@ at https://github.com/ajsap/mailferry
 # pre-releases like 2.0.0-rc.1 are supported).
 # ---------------------------------------------------------------------------
 
-__version__ = "1.0.0"
+__version__ = "1.2.0-dev"
 
 PRODUCT = "MailFerry"
 TITLE = "MailFerry – IMAP Migration & Sync"
@@ -36,7 +36,9 @@ COPYRIGHT = "Copyright (C) 2026 Andy Saputra <andy@saputra.org>"
 REPOSITORY = "https://github.com/ajsap/mailferry"
 PROJECT_URL = "https://saputra.org"
 SUPPORT_URL = "https://github.com/ajsap/mailferry/issues"
+DOCS_URL = "https://github.com/ajsap/mailferry/tree/main/docs"
 LICENSE_NAME = "GNU Affero General Public License v3.0 (AGPL-3.0)"
+LICENSE_SHORT = "GNU AGPL v3.0"
 
 
 def banner_line() -> str:
@@ -47,6 +49,36 @@ def banner_line() -> str:
 def version_text() -> str:
     """Two-line output for --version (title + official slogan)."""
     return f"{banner_line()}\n{SLOGAN}"
+
+
+def about_lines() -> list:
+    """Canonical About block (shared by --about and the F10 Help/About view)."""
+    return [
+        f"About {PRODUCT}",
+        SLOGAN,
+        "──────────────────────────────────────",
+        "Version",
+        f"  v{__version__}",
+        "",
+        "Author",
+        f"  {AUTHOR}",
+        f"  {AUTHOR_EMAIL}",
+        "",
+        "Repository",
+        f"  {REPOSITORY}",
+        "",
+        "Documentation",
+        f"  {DOCS_URL}",
+        "",
+        "Issue Tracker",
+        f"  {SUPPORT_URL}",
+        "",
+        "Community",
+        f"  {PROJECT_URL}",
+        "",
+        "Licence",
+        f"  {LICENSE_SHORT}",
+    ]
 
 
 def about_text() -> str:
@@ -61,6 +93,9 @@ Author:
 Repository:
   {REPOSITORY}
 
+Documentation:
+  {DOCS_URL}
+
 Support / Issues:
   {SUPPORT_URL}
 
@@ -74,6 +109,10 @@ tools, no third-party dependencies — and migrates, synchronises and backs
 up mailboxes with per-message state in its State Database, duplicate
 prevention, and a live Dashboard covering both the Source Server and the
 Destination Server.
+
+Changelog:
+  'mailferry changelog' for this release, or the full history at
+  {REPOSITORY}/blob/main/CHANGELOG.md and {REPOSITORY}/releases
 
 Contributions are welcome.
 Fork the project, report issues, or submit pull requests on GitHub.

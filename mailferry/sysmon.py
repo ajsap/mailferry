@@ -122,15 +122,55 @@ class SysMon:
             return total, total - avail
         if sys.platform == "darwin":
             import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
             if self._mac_total is None:
-                libc = ctypes.CDLL(None, use_errno=True)
                 size = ctypes.c_uint64(0)
                 sz = ctypes.c_size_t(ctypes.sizeof(size))
                 if libc.sysctlbyname(b"hw.memsize", ctypes.byref(size), ctypes.byref(sz), None, 0) != 0:
                     return None
                 self._mac_total = float(size.value)
-            return self._mac_total, None
-        return None
+            used = self._mac_used(ctypes, libc)
+            return self._mac_total, used
+
+    def _mac_used(self, ctypes, libc):
+        """Used memory ≈ (active + wired + compressor) pages, via
+        host_statistics64(HOST_VM_INFO64) — no subprocesses."""
+        try:
+            class VMStat64(ctypes.Structure):
+                _fields_ = [
+                    ("free_count", ctypes.c_uint), ("active_count", ctypes.c_uint),
+                    ("inactive_count", ctypes.c_uint), ("wire_count", ctypes.c_uint),
+                    ("zero_fill_count", ctypes.c_uint64), ("reactivations", ctypes.c_uint64),
+                    ("pageins", ctypes.c_uint64), ("pageouts", ctypes.c_uint64),
+                    ("faults", ctypes.c_uint64), ("cow_faults", ctypes.c_uint64),
+                    ("lookups", ctypes.c_uint64), ("hits", ctypes.c_uint64),
+                    ("purges", ctypes.c_uint64),
+                    ("purgeable_count", ctypes.c_uint), ("speculative_count", ctypes.c_uint),
+                    ("decompressions", ctypes.c_uint64), ("compressions", ctypes.c_uint64),
+                    ("swapins", ctypes.c_uint64), ("swapouts", ctypes.c_uint64),
+                    ("compressor_page_count", ctypes.c_uint), ("throttled_count", ctypes.c_uint),
+                    ("external_page_count", ctypes.c_uint), ("internal_page_count", ctypes.c_uint),
+                    ("total_uncompressed_pages_in_compressor", ctypes.c_uint64),
+                ]
+
+            if self._mac is None:
+                libc.mach_host_self.restype = ctypes.c_uint
+                self._mac = (libc, libc.mach_host_self())
+            _, host = self._mac
+            page = ctypes.c_uint64(0)
+            sz = ctypes.c_size_t(ctypes.sizeof(page))
+            if libc.sysctlbyname(b"hw.pagesize", ctypes.byref(page), ctypes.byref(sz), None, 0) != 0:
+                return None
+            stat = VMStat64()
+            count = ctypes.c_uint(ctypes.sizeof(stat) // 4)
+            HOST_VM_INFO64 = 4
+            if libc.host_statistics64(host, HOST_VM_INFO64,
+                                      ctypes.byref(stat), ctypes.byref(count)) != 0:
+                return None
+            pages_used = stat.active_count + stat.wire_count + stat.compressor_page_count
+            return float(pages_used) * float(page.value)
+        except Exception:
+            return None
 
     @staticmethod
     def _rss():

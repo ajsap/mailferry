@@ -124,7 +124,8 @@ def reconstruct_frames(raw: bytes):
         for i, row in enumerate(rows):
             if i >= ROWS:
                 break
-            row = row.replace("\x1b[J", "")
+            row = re.sub(r"\x1b\[\?25[hl]|\x1b\[\d+;\d+H|\x1b\[J|\x1b\[2J", "", row)
+            row = row.rstrip("\r")            # pty ONLCR emits \r\n
             if row == "":
                 continue                      # unchanged row (diff repaint)
             screen[i] = row.replace("\x1b[K", "")
@@ -133,19 +134,21 @@ def reconstruct_frames(raw: bytes):
 
 
 def trim_to_footer(frame):
-    """Cut any stale rows left below the frame's real footer (ETA line)."""
+    """Cut stale rows below the TUI footer (the shortcut hint line)."""
     last = None
     for i, row in enumerate(frame):
-        if "Batch ETA" in row:
+        if "^C Quit" in row or "Batch ETA" in row or "mailferry>" in row:
             last = i
     return frame[: last + 1] if last is not None else frame
 
 
 def pick_frame(frames):
+    """Pick the richest live TUI Dashboard frame (banner present + a running
+    mailbox actively migrating)."""
     best = None
     for f in frames:
         joined = "\n".join(f)
-        if "RUNNING" in joined and ("MIGRATE" in joined or "SCAN" in joined):
+        if "MailFerry v" in joined and ("MIGRATE" in joined or "Running Mailboxes" in joined):
             best = f
     return best or (frames[-1] if frames else None)
 

@@ -177,6 +177,9 @@ def build():
     stage = build_dir / "app"
     shutil.copytree(ROOT / "mailferry", stage / "mailferry",
                     ignore=shutil.ignore_patterns("__pycache__"))
+    # Bundle the changelog into the package so `mailferry changelog` works
+    # from the standalone .pyz (single source stays CHANGELOG.md at the root).
+    shutil.copy2(ROOT / "CHANGELOG.md", stage / "mailferry" / "CHANGELOG.md")
     pyz = dist / "mailferry.pyz"
     zipapp.create_archive(stage, pyz, interpreter="/usr/bin/env python3",
                           main="mailferry.cli:console")

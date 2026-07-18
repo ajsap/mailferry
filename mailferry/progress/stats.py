@@ -85,7 +85,9 @@ class MailboxStats:
         self.adopted = 0
         self.dup_skipped = 0
         self.skipped = 0
+        self.failed_msgs = 0                 # Failed Message Registry (permanent)
         self.retries = 0
+        self.recovering = 0                  # stale-recovery attempt in progress
         self.error = ""
         self.retry_wait_until = 0.0
         self.start_time = 0.0
@@ -115,7 +117,9 @@ class MailboxStats:
             "bytes_done": self.bytes_done, "bytes_total": self.bytes_total,
             "appended": self.appended, "adopted": self.adopted,
             "dup_skipped": self.dup_skipped, "skipped": self.skipped,
-            "retries": self.retries, "error": self.error,
+            "failed": self.failed_msgs,
+            "retries": self.retries, "recovering": self.recovering,
+            "error": self.error,
             "retry_wait_until": self.retry_wait_until,
             "start": self.start_time, "end": self.end_time,
             "src": self.src.snap(), "dst": self.dst.snap(),
@@ -135,6 +139,13 @@ class Stats:
         self.logs_dir = ""
         self.skipped_prior = 0
         self.interrupted = False
+        self.stalls_detected = 0
+        self.stalls_recovered = 0
+        self.stalls_failed = 0
+
+    def bump(self, name: str, n: int = 1):
+        with self.lock:
+            setattr(self, name, getattr(self, name) + n)
 
     def mailbox(self, index: int, label: str, src_host: str, dst_host: str,
                 label2: str = "") -> MailboxStats:
@@ -158,6 +169,7 @@ class Stats:
             "adopted": sum(m["adopted"] for m in mbs),
             "dup_skipped": sum(m["dup_skipped"] for m in mbs),
             "skipped_msgs": sum(m["skipped"] for m in mbs),
+            "failed_msgs": sum(m["failed"] for m in mbs),
             "retries": sum(m["retries"] for m in mbs),
             "reconnects": sum(m["src"]["reconnects"] + m["dst"]["reconnects"] for m in mbs),
             "wire_rx": sum(m["src"]["rx"] + m["dst"]["rx"] for m in mbs),
@@ -171,6 +183,9 @@ class Stats:
             "workers": self.workers, "csv": self.csv_file, "db": self.db_path,
             "logs": self.logs_dir, "skipped_prior": self.skipped_prior,
             "interrupted": self.interrupted,
+            "stalls": {"detected": self.stalls_detected,
+                       "recovered": self.stalls_recovered,
+                       "failed": self.stalls_failed},
             "mailboxes": mbs, "agg": agg, "counts": counts,
         }
 

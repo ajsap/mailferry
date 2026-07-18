@@ -25,9 +25,11 @@ import csv as csvmod
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[0].parent))
+ROOT = Path(__file__).resolve().parents[0].parent
+sys.path.insert(0, str(ROOT))
 
 from mailferry import cli                                    # noqa: E402
 from mailferry.imap import mutf7                             # noqa: E402
@@ -242,6 +244,276 @@ def main():
     check("skipped: zero appends", s_dst.append_count == before)
     rows = read_results(logs)
     check("status SKIPPED", rows and rows[0]["status"] == "SKIPPED", f"{rows and rows[0]['status']}")
+
+    print("\n== T9: stale detection — automatic recovery (server hangs once) ==")
+    t9_src = Account("u9", "p")
+    for i in range(40):
+        t9_src.folders["INBOX"].add(
+            (f"Message-ID: <t9m{i}@x>\r\nSubject: t9 {i}\r\n\r\n" + "S" * 1500).encode())
+    t9_dst = Account("u9", "p")
+    s9a, s9b = FakeIMAPServer({"u9": t9_src}), FakeIMAPServer({"u9": t9_dst})
+    s9a.stall_after = 10                    # hang mid-folder ...
+    s9a.stall_mode = "once"                 # ... but recover on the next connection
+    st9 = ServerThread(s9a, s9b)
+    st9.start()
+    csv9 = tmp / "t9.csv"
+    with open(csv9, "w", newline="") as f:
+        w = csvmod.writer(f)
+        w.writerow(["oldhost", "oldport", "oldsecurity", "olduser", "oldpassword",
+                    "newhost", "newport", "newsecurity", "newuser", "newpassword"])
+        w.writerow(["127.0.0.1", s9a.port, "none", "u9", "p",
+                    "127.0.0.1", s9b.port, "none", "u9", "p"])
+    base9 = ["run", str(csv9), "--db", str(tmp / "t9.db"), "--logs-dir", logs,
+             "--workers", "1", "--timeout", "60", "--retry-delay", "1",
+             "--stale-timeout", "2", "--recovery-interval", "1", "--recovery-retries", "3"]
+    t0 = time.time()
+    rc = run_cli(base9)
+    dt9 = time.time() - t0
+    check("recovered run rc 0", rc == 0, f"rc={rc}")
+    check("recovery was prompt (<25s)", dt9 < 25, f"{dt9:.1f}s")
+    check("all messages delivered", len(t9_dst.folders["INBOX"].msgs) == 40,
+          f"{len(t9_dst.folders['INBOX'].msgs)}")
+    check("no duplicates after recovery",
+          len({m.body for m in t9_dst.folders["INBOX"].msgs}) == 40)
+    slog = (Path(logs) / "session.log").read_text()
+    check("stall detected logged", "stalled transfer detected" in slog)
+    check("recovery success logged", "transfer recovered" in slog)
+
+    print("\n== T10: recovery exhausted -> STALE, then clean resume ==")
+    t10_src = Account("u10", "p")
+    for i in range(30):
+        t10_src.folders["INBOX"].add(
+            (f"Message-ID: <t10m{i}@x>\r\nSubject: t10 {i}\r\n\r\n" + "S" * 1200).encode())
+    t10_dst = Account("u10", "p")
+    sa, sb = FakeIMAPServer({"u10": t10_src}), FakeIMAPServer({"u10": t10_dst})
+    sa.stall_after = 8                      # stalls EVERY connection
+    st10 = ServerThread(sa, sb)
+    st10.start()
+    csv10 = tmp / "t10.csv"
+    with open(csv10, "w", newline="") as f:
+        w = csvmod.writer(f)
+        w.writerow(["oldhost", "oldport", "oldsecurity", "olduser", "oldpassword",
+                    "newhost", "newport", "newsecurity", "newuser", "newpassword"])
+        w.writerow(["127.0.0.1", sa.port, "none", "u10", "p",
+                    "127.0.0.1", sb.port, "none", "u10", "p"])
+    base10 = ["run", str(csv10), "--db", str(tmp / "t10.db"), "--logs-dir", logs,
+              "--workers", "1", "--timeout", "60", "--retry-delay", "1",
+              "--stale-timeout", "2", "--recovery-interval", "1", "--recovery-retries", "2"]
+    rc = run_cli(base10)
+    rows = read_results(logs)
+    check("exhausted run rc 1", rc == 1, f"rc={rc}")
+    check("status STALE", rows and rows[0]["status"] == "STALE",
+          f"{rows and rows[0]['status']}")
+    check("STALE notes explain", rows and "recovery failed" in rows[0]["notes"])
+    slog = (Path(logs) / "session.log").read_text()
+    check("RECOVERY EXHAUSTED logged", "RECOVERY EXHAUSTED" in slog)
+    delivered = len(t10_dst.folders["INBOX"].msgs)
+    check("partial progress kept", 0 < delivered < 30, f"{delivered}")
+    sa.stall_after = None                   # server comes back
+    before10 = sb.append_count
+    rc = run_cli(base10)
+    check("resume rc 0", rc == 0, f"rc={rc}")
+    check("resume completed all", len(t10_dst.folders["INBOX"].msgs) == 30,
+          f"{len(t10_dst.folders['INBOX'].msgs)}")
+    check("resume appended only the gap", sb.append_count - before10 == 30 - delivered,
+          f"{sb.append_count - before10} vs {30 - delivered}")
+    check("no duplicates after STALE resume",
+          len({m.body for m in t10_dst.folders["INBOX"].msgs}) == 30)
+    st10.stop()
+
+    print("\n== T11: cluster leases — dead workers are reclaimed, never refused ==")
+    import sqlite3 as sq
+    dead = "deadhost:999:aabbccdd"
+
+    def plant_lock(age_secs, worker_hb=None):
+        con = sq.connect(tmp / "t9.db")
+        con.execute("UPDATE mailboxes SET lease_owner=?, lease_ts=?",
+                    (dead, time.time() - age_secs))
+        con.execute("DELETE FROM workers")
+        if worker_hb is not None:
+            con.execute("INSERT INTO workers(id,host,pid,run_id,started,heartbeat) "
+                        "VALUES(?,?,?,?,?,?)", (dead, "deadhost", 999, "x",
+                                                time.time() - 500,
+                                                time.time() - worker_hb))
+        con.commit()
+        con.close()
+
+    def slog():
+        return (Path(logs) / "session.log").read_text()
+
+    plant_lock(170)                          # legacy lease (no worker row), silent 170s
+    rc = run_cli(base9)
+    check("legacy dead lease reclaimed rc 0", rc == 0, f"rc={rc}")
+    check("reclaim logged", "reclaimed from offline worker" in slog())
+    plant_lock(10, worker_hb=120)            # cluster worker silent 120s > 60s timeout
+    rc = run_cli(base9)
+    check("offline worker reclaimed rc 0", rc == 0, f"rc={rc}")
+    plant_lock(400)                          # ancient lease: auto-reset path
+    rc = run_cli(base9)
+    check("expired lock auto-reset rc 0", rc == 0, f"rc={rc}")
+    check("auto-reset logged", "stale lock auto-reset" in slog())
+    check("worker registration logged", "cluster: joined as worker" in slog())
+    st9.stop()
+
+    print("\n== T12: two live instances — split, watch, kill -9 failover ==")
+    import subprocess
+    t12_src = Account("u12", "p")
+    for i in range(36):
+        t12_src.folders["INBOX"].add(
+            (f"Message-ID: <t12m{i}@x>\r\nSubject: t12 {i}\r\n\r\n" + "T" * 1200).encode())
+    t12_dst = Account("u12", "p")
+    sc, sd = FakeIMAPServer({"u12": t12_src}), FakeIMAPServer({"u12": t12_dst})
+    sc.stall_after = 6                       # instance A hangs mid-folder ...
+    sc.stall_mode = "once"                   # ... and the line is clear for B
+    st12 = ServerThread(sc, sd)
+    st12.start()
+    csv12 = tmp / "t12.csv"
+    with open(csv12, "w", newline="") as f:
+        w = csvmod.writer(f)
+        w.writerow(["oldhost", "oldport", "oldsecurity", "olduser", "oldpassword",
+                    "newhost", "newport", "newsecurity", "newuser", "newpassword"])
+        w.writerow(["127.0.0.1", sc.port, "none", "u12", "p",
+                    "127.0.0.1", sd.port, "none", "u12", "p"])
+    db12 = str(tmp / "t12.db")
+    logsA, logsB = str(tmp / "logsA"), str(tmp / "logsB")
+    argv = [sys.executable, "-m", "mailferry", "run", str(csv12), "--db", db12,
+            "--workers", "1", "--timeout", "60", "--retry-delay", "1",
+            "--stale-timeout", "0", "--worker-timeout", "4", "--no-tui"]
+    env = dict(os.environ)
+    procA = subprocess.Popen(argv + ["--logs-dir", logsA], cwd=str(ROOT), env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    deadline = time.time() + 30              # wait until A owns the mailbox & stalls
+    while time.time() < deadline and sc.fetch_body_count <= 6:
+        time.sleep(0.3)
+    check("A claimed and hit the stall", sc.fetch_body_count > 6,
+          f"fetches={sc.fetch_body_count}")
+    procB = subprocess.Popen(argv + ["--logs-dir", logsB], cwd=str(ROOT), env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    time.sleep(4.0)                          # B joins, sees the mailbox as REMOTE
+    procA.kill()                             # power-loss simulation (kill -9)
+    try:
+        outB, _ = procB.communicate(timeout=90)
+    except subprocess.TimeoutExpired:
+        procB.kill()
+        outB = b"(timeout)"
+        check("B finished after failover", False, "B timed out")
+    else:
+        check("B finished after failover rc 0", procB.returncode == 0,
+              f"rc={procB.returncode}")
+    procA.wait(timeout=10)
+    slogB = (Path(logsB) / "session.log").read_text()
+    check("B watched the remote worker", "REMOTE — being processed by worker" in slogB)
+    check("B reclaimed after kill -9", "went offline — reclaimed" in slogB
+          or "reclaimed from offline worker" in slogB, slogB[-400:])
+    check("B joined the cluster", "cluster: joined as worker" in slogB)
+    got12 = len(t12_dst.folders["INBOX"].msgs)
+    check("all messages delivered across failover", got12 == 36, f"{got12}")
+    check("no duplicates across failover",
+          len({m.body for m in t12_dst.folders["INBOX"].msgs}) == 36)
+    st12.stop()
+
+    print("\n== T13: poison messages — isolation, registry, WARNINGS, retry ==")
+    t13_src = Account("u13", "p")
+    f13 = t13_src.folders["INBOX"]
+    for i in range(20):
+        marker = b"KILLME" if i == 7 else (b"REJECTME" if i == 12 else b"OK")
+        f13.add((f"Message-ID: <t13m{i}@x>\r\nSubject: poison {i}\r\n"
+                 f"From: Boss <boss@x>\r\nDate: Fri, 17 Jul 2026 10:00:00 +0000\r\n"
+                 "\r\n").encode() + marker + b" " + b"B" * 900)
+    t13_dst = Account("u13", "p")
+    se, sf = FakeIMAPServer({"u13": t13_src}), FakeIMAPServer({"u13": t13_dst})
+    sf.append_kill = b"KILLME"       # content filter drops the connection
+    sf.append_reject = b"REJECTME"   # server answers a clean NO
+    st13 = ServerThread(se, sf)
+    st13.start()
+    csv13 = tmp / "t13.csv"
+    with open(csv13, "w", newline="") as f:
+        w = csvmod.writer(f)
+        w.writerow(["oldhost", "oldport", "oldsecurity", "olduser", "oldpassword",
+                    "newhost", "newport", "newsecurity", "newuser", "newpassword"])
+        w.writerow(["127.0.0.1", se.port, "none", "u13", "p",
+                    "127.0.0.1", sf.port, "none", "u13", "p"])
+    base13 = ["run", str(csv13), "--db", str(tmp / "t13.db"), "--logs-dir", logs,
+              "--workers", "1", "--timeout", "45", "--retry-delay", "1",
+              "--stale-timeout", "0"]
+    t0 = time.time()
+    rc = run_cli(base13)
+    dt13 = time.time() - t0
+    rows = read_results(logs)
+    check("poison run rc 0 (warnings complete)", rc == 0, f"rc={rc}")
+    check("status WARNINGS", rows[0]["status"] == "WARNINGS", rows[0]["status"])
+    check("2 failed recorded", rows[0]["msgs_failed"] == "2", rows[0]["msgs_failed"])
+    check("18 healthy delivered", len(t13_dst.folders["INBOX"].msgs) == 18,
+          f"{len(t13_dst.folders['INBOX'].msgs)}")
+    check("isolation was fast (<60s)", dt13 < 60, f"{dt13:.1f}s")
+    check("no duplicates around poison",
+          len({m.body for m in t13_dst.folders["INBOX"].msgs}) == 18)
+    mlog13 = next(Path(logs).glob("0*u13.log")).read_text()
+    check("Recovery Mode logged", "Recovery Mode" in mlog13)
+    check("registry block logged", "Failed Message Registry" in mlog13
+          and "Subject: poison" in mlog13)
+    check("failed_messages.csv written",
+          (Path(logs) / "failed_messages.csv").exists())
+    import sqlite3 as sq13
+    con = sq13.connect(tmp / "t13.db")
+    freg = con.execute("SELECT src_uid, ftype, status, subject, fail_count "
+                       "FROM failed_messages ORDER BY src_uid").fetchall()
+    con.close()
+    check("registry has both UIDs", [r[0] for r in freg] == [8, 13], f"{freg}")
+    types = {r[0]: r[1] for r in freg}
+    check("kill classified CONNECTION_RESET", types.get(8) == "CONNECTION_RESET", f"{types}")
+    check("reject classified APPEND_NO", types.get(13) == "APPEND_NO", f"{types}")
+    check("metadata captured", all(r[3].startswith("poison") for r in freg), f"{freg}")
+    before13 = sf.append_count
+    rc = run_cli(base13)
+    check("resume skips known-failed instantly", rc == 0 and sf.append_count == before13,
+          f"rc={rc} appends+{sf.append_count - before13}")
+    mlog13 = next(Path(logs).glob("0*u13.log")).read_text()
+    check("skip logged", "previously failed message(s)" in mlog13)
+    check("failed command lists them", run_cli(["failed", "--db", str(tmp / "t13.db")]) == 0)
+    sf.append_kill = b""
+    sf.append_reject = b""            # server fixed (filter removed)
+    rc = run_cli(["retry-failed", "--db", str(tmp / "t13.db")])
+    check("retry-failed rc 0", rc == 0, f"rc={rc}")
+    rc = run_cli(base13)
+    rows = read_results(logs)
+    check("retry run completes SUCCESS", rc == 0 and rows[0]["status"] == "SUCCESS",
+          f"rc={rc} {rows[0]['status']}")
+    check("all 20 delivered after recovery", len(t13_dst.folders["INBOX"].msgs) == 20)
+    con = sq13.connect(tmp / "t13.db")
+    recovered = con.execute("SELECT COUNT(*) FROM failed_messages "
+                            "WHERE status='RECOVERED'").fetchone()[0]
+    con.close()
+    check("registry rows RECOVERED", recovered == 2, f"{recovered}")
+    st13.stop()
+
+    print("\n== T14: mailferry.toml — generate, load, validate, override ==")
+    cfgdir = tmp / "cfg"
+    os.environ["MAILFERRY_CONFIG_DIR"] = str(cfgdir)
+    try:
+        from mailferry.configfile import load_config
+        vals, warns, cpath, created = load_config()
+        check("config auto-generated", created and cpath.exists(), f"{cpath}")
+        check("defaults produce no warnings", not warns, f"{warns}")
+        text = cpath.read_text()
+        check("config documented", text.count("#") > 20 and "[migration]" in text
+              and "Andy Saputra" in text)
+        cpath.write_text(text.replace("parallel_mailboxes = 10", "parallel_mailboxes = 4")
+                         .replace("worker_timeout_seconds = 60",
+                                  "worker_timeout_seconds = 5")   # invalid (< 20)
+                         + "\n[future]\nshiny = true\n")
+        vals, warns, _, _ = load_config()
+        check("valid override applied", vals.get("workers") == 4, f"{vals.get('workers')}")
+        check("invalid value warned + dropped",
+              "worker_timeout_seconds" in " ".join(warns) and "worker_timeout" not in vals,
+              f"{warns}")
+        check("unknown section warned, not fatal",
+              any("future.shiny" in w for w in warns), f"{warns}")
+        cpath.write_text("this is { not toml [at all")
+        vals, warns, _, _ = load_config()
+        check("broken config never fatal", vals == {} and warns, f"{warns}")
+    finally:
+        os.environ.pop("MAILFERRY_CONFIG_DIR", None)
 
     print("\n== unit: interval math & mutf7 ==")
     check("mutf7 roundtrip", mutf7.decode(mutf7.encode("Boîte/Épinglés & más")) == "Boîte/Épinglés & más")
