@@ -97,6 +97,30 @@ func RunMigrationBus(ctx context.Context, cfg *config.Run, specs []config.Mailbo
 	owner := state.LeaseOwnerID()
 	bus.WorkerID = owner
 	db.StartRun(cfg.RunID, cfg.CSVFile)
+	// ISO 8601 date-range persistence: the window is DB-wide and first-write
+	// wins, so a resume (fresh RunID, same State DB) applies the identical
+	// selection, and every worker in a cluster converges on one window. Save
+	// our resolved range (a no-op if one is already stored or if ours is
+	// inactive), then read back the authoritative stored window — if one
+	// exists it wins over whatever --from/--to this invocation supplied. On an
+	// ephemeral run there is no persistence, so cfg.Range simply applies as-is.
+	if !cfg.Ephemeral {
+		db.SaveRange(cfg.Range.StoredFrom(), cfg.Range.StoredTo(), cfg.Range.TZ)
+		if f, t, tz, found := db.LoadRange(); found {
+			stored := config.RangeFromStored(f, t, tz)
+			if !cfg.Range.Active && stored.Active {
+				session("date range: applying persisted window " + stored.Label() +
+					" from an earlier run of this State Database")
+			} else if cfg.Range.Active && stored.Active &&
+				(stored.StoredFrom() != cfg.Range.StoredFrom() ||
+					stored.StoredTo() != cfg.Range.StoredTo()) {
+				session("date range: this run supplied " + cfg.Range.Label() +
+					" but the State Database already fixed " + stored.Label() +
+					" — the stored window wins so the resume is deterministic")
+			}
+			cfg.Range = stored
+		}
+	}
 	db.RegisterWorker(owner, cfg.RunID)
 	session(fmt.Sprintf("cluster: joined as worker %s (offline threshold %ds)",
 		owner, int(cfg.WorkerTimeout)))

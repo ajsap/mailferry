@@ -12,7 +12,7 @@ binary speaks IMAP directly to both servers, streams messages
 source-to-destination with bounded memory, and records per-message state
 in an SQLite database so every run is resumable and duplicate-free.
 
-> **Release status: `v2.0.0-rc.3` (Release Candidate — pre-release).**
+> **Release status: `v2.0.0` (stable).**
 > v1.0.0 was the original Python implementation; development continued
 > unreleased after it and served as the behavioural reference for the
 > complete native Go rewrite that is v2. Release candidates exist for
@@ -43,7 +43,7 @@ permanent `legacy/python-final` branch as the behavioural reference; the
 Go engine reached feature parity with it before this RC (see
 `docs/PARITY-v2.0.0-RC.md`).
 
-## Feature status in v2.0.0-rc.3
+## Feature status in v2.0.0
 
 **Implemented** (covered by the automated suite):
 
@@ -70,14 +70,28 @@ Go engine reached feature parity with it before this RC (see
   virtual-folder handling, `--sync-flags` backup mode, `--order size`,
   NDJSON logs, protocol trace with credential redaction
 
-**Planned** (not in this RC — these commands do not exist yet):
+- **Whole-file CSV validation** — every error reported in one pass
+  before anything starts; passwords never echoed
+- **`--dry-run`** — a genuine read-only run: mutating IMAP commands are
+  blocked inside the client before any byte reaches the wire, state is
+  kept in memory only, and a DRY RUN summary shows the effective plan
+- **ISO 8601 date-range migration** — `--from` / `--to`
+  (`YYYY-MM-DDTHH:MM:SS`, optional offset or `Z`; both bounds inclusive;
+  IMAP INTERNALDATE is authoritative; the resolved window is persisted
+  so resume is deterministic)
+- **`mailferry dedup`** — explicit destination deduplication: analysis
+  by default (report only); `--execute` moves duplicates to a
+  MailFerry-Quarantine folder or flags them `\Deleted` without
+  expunging — reversible by design; strong Message-ID + size +
+  fingerprint matching (uncertain = retained); interruption-safe
+- **`mailferry attach`** — read-only live monitor of a running headless
+  migration (1 Hz State-Database snapshots + session-log tail); attach,
+  detach and re-attach freely — workers are never disturbed
+- **`--portable`** — self-contained mode: configuration, State
+  Database, logs and cache live beside the executable
 
-- Destination **deduplication mode** (conservative, dry-run by default,
-  full audit trail)
-- **Date-range migration** (`--from` / `--to`, INTERNALDATE-authoritative)
-- `mailferry attach` (connect a TUI to a running headless migration over
-  local IPC)
-- OAuth 2.0 (XOAUTH2/OAUTHBEARER), MULTIAPPEND, QRESYNC (v2.1.0)
+**Planned for v2.1.0**: OAuth 2.0 (XOAUTH2/OAUTHBEARER), MULTIAPPEND,
+QRESYNC delta sync, permanent quarantine purge.
 
 ## Installation
 
@@ -87,8 +101,8 @@ checksum, make it executable, run it. There is nothing else to install.
 
 ```sh
 shasum -a 256 -c SHA256SUMS          # verify (macOS: shasum, Linux: sha256sum)
-chmod +x mailferry-v2.0.0-rc.3-darwin-arm64
-./mailferry-v2.0.0-rc.3-darwin-arm64 version
+chmod +x mailferry-v2.0.0-darwin-arm64
+./mailferry-v2.0.0-darwin-arm64 version
 ```
 
 Targets: `darwin-arm64` (all Apple Silicon), `darwin-amd64` (Intel Macs),
@@ -179,8 +193,7 @@ Native default locations (`mailferry config paths` shows yours):
 
 Precedence is deterministic: **CLI flags → `mailferry.toml` → native OS
 default**. A `./mailferry.toml` in the working directory is also
-honoured (handy for self-contained setups; a full `--portable` mode is
-planned, not yet implemented).
+honoured (or use the explicit `--portable` mode).
 
 The generated `mailferry.toml` is fully documented, ships every option
 at its built-in default, is never overwritten, and can never stop

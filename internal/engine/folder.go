@@ -121,14 +121,25 @@ func (s *folderSyncer) run() (FolderOutcome, error) {
 	if err != nil {
 		s.op("CREATE dst")
 		s.logf("creating destination folder %s", plan.DstDisplay)
-		if err := s.dst.Create(plan.DstWire); err != nil {
-			return out, err
-		}
-		if s.r.Cfg.Subscribe {
-			s.dst.Subscribe(plan.DstWire)
-		}
-		if st, err = s.dst.Status(plan.DstWire); err != nil {
-			return out, err
+		if cerr := s.dst.Create(plan.DstWire); cerr != nil {
+			// --dry-run: creating the folder was refused at the choke point.
+			// Report the intent and treat the destination as empty so planning
+			// proceeds from the source; every in-window message is then counted
+			// as "would copy" by the APPEND choke point below. A dry run must
+			// not SELECT a folder it did not really create, so we skip STATUS.
+			if imapx.IsDryRunBlocked(cerr) {
+				s.logf("dry-run: would create destination folder %s", plan.DstDisplay)
+				st = map[string]int64{}
+			} else {
+				return out, cerr
+			}
+		} else {
+			if s.r.Cfg.Subscribe {
+				s.dst.Subscribe(plan.DstWire)
+			}
+			if st, err = s.dst.Status(plan.DstWire); err != nil {
+				return out, err
+			}
 		}
 	}
 	uvDst := st["UIDVALIDITY"]
@@ -162,7 +173,8 @@ func (s *folderSyncer) run() (FolderOutcome, error) {
 	totalMissing := util.IntervalsCount(missing)
 	adoptionNeeded := dstMsgs > 0 && !s.r.Cfg.NoDedupScan &&
 		(!adoptDone || s.r.Cfg.RescanDest)
-	var scanned int64
+	rng := s.r.Cfg.Range
+	var scanned, outOfRange, undatable int64
 	for _, ss := range util.SetStrings(missing) {
 		if s.stopped() {
 			return out, errStopRun
@@ -173,6 +185,22 @@ func (s *folderSyncer) run() (FolderOutcome, error) {
 		}
 		rows := make([]state.MsgRow, 0, len(metas))
 		for _, m := range metas {
+			// ISO 8601 date-range selection: a message whose INTERNALDATE falls
+			// outside [From,To] is never planned. An undatable message under an
+			// active range is excluded and counted (correctness first — we do
+			// not guess a message in), but it is still marked "known" via the
+			// folder UID watermark below so it is not re-fetched every resume.
+			if rng.Active {
+				in, ok := rng.IncludesRaw(m.InternalDate)
+				if !ok {
+					undatable++
+					continue
+				}
+				if !in {
+					outOfRange++
+					continue
+				}
+			}
 			fp := ""
 			if adoptionNeeded {
 				fp = util.FingerprintFromHeaders(m.Header, m.Size)
@@ -183,6 +211,10 @@ func (s *folderSyncer) run() (FolderOutcome, error) {
 		db.InsertPlanned(fid, rows)
 		scanned += int64(len(metas))
 		s.op(fmt.Sprintf("SCAN src %d/%d", scanned, totalMissing))
+	}
+	if rng.Active && (outOfRange > 0 || undatable > 0) {
+		s.logf("date range %s: skipped %d outside window, %d undatable",
+			rng.Label(), outOfRange, undatable)
 	}
 	db.UpdateFolder(fid, map[string]any{
 		"uv_src": sel.UIDValidity, "last_uidnext_src": sel.UIDNext})
@@ -408,6 +440,10 @@ func (s *folderSyncer) syncFlagsPass() error {
 		if err := s.dst.UIDStoreFlags(ch.row.DstUID, cleanFlags(ch.new, false)); err != nil {
 			if imapx.IsConnLost(err) {
 				return err
+			}
+			if imapx.IsDryRunBlocked(err) {
+				s.logf("dry-run: would re-sync flags for uid %d", ch.row.SrcUID)
+				continue // no DB write: the change was not really applied
 			}
 			s.logf("flag sync failed for uid %d: %v", ch.row.SrcUID, err)
 			continue
@@ -675,6 +711,18 @@ func (s *folderSyncer) transferPass(rows []state.MsgRow, stripKeywords bool,
 		sink, err := s.dst.AppendBegin(s.plan.DstWire, flags, item.row.InternalDate, size)
 		if err != nil {
 			drainBody(item.bh)
+			// --dry-run: the APPEND was refused at the choke point by design.
+			// This is the EXPECTED outcome — the message WOULD be migrated — so
+			// count it as such and move on. Nothing is written to the server,
+			// and (dry runs force an ephemeral State DB) nothing is persisted.
+			if imapx.IsDryRunBlocked(err) {
+				out.Copied++
+				mb.Add(func(m *MBValues) {
+					m.MsgsDone++
+					m.BytesDone += size
+				})
+				continue
+			}
 			return fail(err)
 		}
 		var sniffer util.HeaderSniffer

@@ -113,7 +113,15 @@ func For(goos string, getenv func(string) string, home string) Paths {
 // Default resolves the native defaults for the running system. The
 // MAILFERRY_CONFIG_DIR override (used by tests and controlled
 // deployments) relocates the configuration file only.
+//
+// When --portable is active (see SetPortable) Default returns the portable
+// layout instead: everything lives beside the executable, so native and
+// TOML locations are bypassed. Explicit --config/--db/--logs-dir flags still
+// win — the caller applies those on top of what Default reports.
 func Default() Paths {
+	if portableRoot != "" {
+		return PortableFor(portableRoot)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
@@ -123,6 +131,68 @@ func Default() Paths {
 		p.ConfigFile = filepath.Join(d, "mailferry.toml")
 	}
 	return p
+}
+
+// portableRoot, once set, relocates every default location to the directory
+// holding the running executable (a self-contained "run from a USB stick"
+// layout). It is a process-global toggle set once during argv handling.
+var portableRoot string
+
+// PortableFor is the pure portable resolver: given a root directory, every
+// canonical location lands directly inside it. The portable root is THE
+// EXECUTABLE'S DIRECTORY (os.Executable with symlinks resolved) — resolved
+// by ExecutableDir and documented there. Performs no filesystem access.
+func PortableFor(root string) Paths {
+	return Paths{
+		ConfigFile:    filepath.Join(root, "mailferry.toml"),
+		StateDB:       filepath.Join(root, "mailferry.db"),
+		LogsDir:       filepath.Join(root, "logs"),
+		CacheDir:      filepath.Join(root, "cache"),
+		LegacyStateDB: "./migration.db",
+	}
+}
+
+// SetPortable turns on portable mode rooted at dir. Passing "" disables it.
+// After this call Default() reports the portable layout.
+func SetPortable(dir string) { portableRoot = dir }
+
+// PortableActive reports whether portable mode is on.
+func PortableActive() bool { return portableRoot != "" }
+
+// PortableRoot returns the active portable root ("" when inactive).
+func PortableRoot() string { return portableRoot }
+
+// ExecutableDir resolves the directory of the running executable with
+// symlinks followed, so a symlinked launcher still roots portable mode at
+// the real binary's folder. Falls back to the current directory only if the
+// executable path cannot be determined.
+func ExecutableDir() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return ".", err
+	}
+	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = resolved
+	}
+	return filepath.Dir(exe), nil
+}
+
+// Writable verifies dir exists and accepts writes, returning a clear,
+// actionable error for a read-only portable root. It creates dir (and
+// parents) first — a fresh portable stick has no logs/ yet — then probes
+// with a temp file it immediately removes.
+func Writable(dir string) error {
+	if err := EnsureDir(dir); err != nil {
+		return err
+	}
+	probe := filepath.Join(dir, ".mailferry-write-probe")
+	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	os.Remove(probe)
+	return nil
 }
 
 // EnsureParent creates the parent directory of file with owner-only

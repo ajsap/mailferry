@@ -8,19 +8,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Remaining before the final v2.0.0 release:
+- macOS Developer ID signing + notarisation pipeline
+  (docs/RELEASING-MACOS.md) — v2.0.0 binaries are not yet signed or
+  notarised.
+- OAuth 2.0, MULTIAPPEND, QRESYNC, quarantine purge (v2.1.0).
 
-- Real-world validation of the v2 release candidates (real IMAP
-  providers, large mailboxes, crash/restart field tests,
-  SSH/tmux/Windows console matrix).
-- New v2 capabilities still in development: destination **deduplication
-  mode** (conservative, dry-run by default, full audit trail),
-  **date-range migration** (`--from`/`--to`, INTERNALDATE-authoritative)
-  and `mailferry attach` over local IPC.
-- macOS **Developer ID signing + notarisation** pipeline
-  (docs/RELEASING-MACOS.md) — RC binaries are not signed with a
-  Developer ID and not notarised.
-- Published Python-vs-Go benchmark comparison; release automation.
+## [2.0.0] - 2026-07-19
+
+**Stable release** of the complete native Go rewrite — the culmination
+of rc.2/rc.3 plus the final feature set, published only after the full
+internal release gate passed.
+
+### Added
+
+- **Whole-file CSV validation**: every detectable error reported in a
+  single pass (headers, ports 1–65535, security none/ssl/starttls,
+  empty values, column counts, quoting), passwords never echoed;
+  migration never starts on invalid input.
+- **`--dry-run`**: strict read-only runs — mutating IMAP verbs (APPEND,
+  STORE, CREATE, …) are blocked at one choke point inside the client
+  before any socket write (proven by fake-server mutation counters:
+  zero), state kept in memory only, DRY RUN plan summary printed.
+- **ISO 8601 date-range migration**: `--from`/`--to`, inclusive bounds,
+  explicit offsets and `Z` honoured, local timezone otherwise; IMAP
+  INTERNALDATE is the authoritative timestamp; the resolved window is
+  persisted in the State Database and a stored window wins on resume
+  (deterministic); no `present`/`now` keywords — an omitted `--to`
+  simply means no upper bound.
+- **`mailferry dedup`**: explicit, destination-only deduplication.
+  Analysis (default and `--dry-run`) mutates nothing and writes a
+  dedup_report.csv; `--execute` relocates duplicates reversibly (UID
+  MOVE to MailFerry-Quarantine when the server offers MOVE, otherwise
+  COPY + `\Deleted` flag — **EXPUNGE is never issued**; permanent
+  deletion is deliberately not implemented). Duplicates require
+  matching normalised Message-ID AND size AND header fingerprint;
+  uncertain matches are always retained; keeper is the lowest UID;
+  interruption-safe and resumable via the dedup_state table; actively
+  leased mailboxes are skipped with a clear notice.
+- **`mailferry attach`**: read-only live monitor for running headless
+  migrations — 1 Hz read-only State-Database snapshots plus a session
+  log tail; takes no leases, writes nothing; attach/detach/re-attach
+  freely without ever disturbing workers; non-TTY invocations print a
+  one-shot status snapshot.
+- **`--portable`**: self-contained mode rooted at the executable's
+  directory (mailferry.toml, mailferry.db, logs/, cache/); precedence
+  CLI flags → portable → TOML → native; informational commands remain
+  zero-side-effect; read-only roots produce clear actionable errors.
+
+### Changed
+
+- Version identity to stable v2.0.0 across the application,
+  documentation and release artefacts.
 
 ## [2.0.0-rc.3] - 2026-07-19
 
@@ -495,7 +533,8 @@ Engine.
   suite (34 checks).
 - Packaging: standalone `mailferry.pyz` (zipapp), source archive, wheel.
 
-[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.3...HEAD
+[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.3...v2.0.0
 [2.0.0-rc.3]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.2...v2.0.0-rc.3
 [2.0.0-rc.2]: https://github.com/ajsap/mailferry/compare/v1.0.0...v2.0.0-rc.2
 [2.0.0-rc.1]: https://github.com/ajsap/mailferry/blob/main/CHANGELOG.md

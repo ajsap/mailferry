@@ -57,6 +57,15 @@ func IsConnLost(err error) bool {
 	return errors.As(err, &c)
 }
 
+// IsDryRunBlocked reports whether err is the sentinel returned when a mutating
+// command is refused under --dry-run (see blockedDryRun). The engine treats it
+// as the EXPECTED, successful outcome of a dry run — the message would have been
+// migrated — not as a failure to retry.
+func IsDryRunBlocked(err error) bool {
+	var c *CommandErr
+	return errors.As(err, &c) && c.Status == "DRYRUN"
+}
+
 // ------------------------------------------------------------- pending --
 
 type Result struct {
@@ -148,6 +157,7 @@ type Client struct {
 	Log        func(string)
 	Trace      bool // wire trace into the mailbox log (credentials redacted)
 	Baseline   bool // RFC-3501-only: no LITERAL+, no COMPRESS
+	ReadOnly   bool // --dry-run: mutating commands are blocked at the choke point
 
 	conn     net.Conn
 	br       *bufio.Reader
@@ -527,8 +537,45 @@ func (c *Client) route(r *Response) {
 
 // ------------------------------------------------------------ commands --
 
+// mutatingVerbs is the complete set of IMAP commands that change server-side
+// state. --dry-run (ReadOnly) blocks every one of them at the lowest-level
+// command writers (CmdNowait and AppendBegin), so NO caller — present or
+// future — can leak a mutation past the guard. The check keys on the leading
+// verb, so "UID STORE"/"UID COPY"/"UID MOVE" are matched via their first word
+// too.
+var mutatingVerbs = map[string]bool{
+	"APPEND": true, "STORE": true, "COPY": true, "MOVE": true,
+	"CREATE": true, "DELETE": true, "RENAME": true, "EXPUNGE": true,
+	"SUBSCRIBE": true, "UNSUBSCRIBE": true, "SETACL": true, "DELETEACL": true,
+	"SETMETADATA": true, "SETQUOTA": true,
+}
+
+// isMutating reports whether a command name (possibly "UID STORE" etc.) is a
+// server-state mutation that --dry-run must block.
+func isMutating(name string) bool {
+	up := strings.ToUpper(strings.TrimSpace(name))
+	if mutatingVerbs[up] {
+		return true
+	}
+	// "UID STORE", "UID COPY", "UID MOVE", "UID EXPUNGE" — key on the sub-verb.
+	if strings.HasPrefix(up, "UID ") {
+		return mutatingVerbs[strings.TrimSpace(up[4:])]
+	}
+	return false
+}
+
+// blockedDryRun is the error returned for a mutation attempted under
+// --dry-run. It NEVER touches the socket, so a dry run provably writes
+// nothing to either server.
+func blockedDryRun(name string) error {
+	return &CommandErr{Name: name, Status: "DRYRUN", Text: "blocked: --dry-run"}
+}
+
 // CmdNowait issues a pipelined command; collect untagged types into it.
 func (c *Client) CmdNowait(name, args string, types ...string) (*Pending, error) {
+	if c.ReadOnly && isMutating(name) {
+		return nil, blockedDryRun(name) // choke point: nothing is written
+	}
 	tag := ""
 	c.mu.Lock()
 	c.tagN++
@@ -854,6 +901,9 @@ func (a *AppendSink) Finish() (*Pending, error) {
 // AppendBegin opens a streamed APPEND. With LITERAL+ no round trip is
 // needed; otherwise it waits for the continuation.
 func (c *Client) AppendBegin(mailboxWire, flags, internalDate string, size int64) (*AppendSink, error) {
+	if c.ReadOnly {
+		return nil, blockedDryRun("APPEND") // choke point: no literal is ever sent
+	}
 	c.pendAppends.Add(1)
 	args := quoteIMAP(mailboxWire)
 	if flags != "" {

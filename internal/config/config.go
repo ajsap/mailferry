@@ -17,6 +17,7 @@ import (
 	"crypto/rand"
 	"encoding/csv"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -95,6 +96,20 @@ type Run struct {
 	TLSVerify         bool
 	RefreshMS         int
 	RunID             string
+
+	// DryRun is the general-purpose zero-mutation mode (feature: --dry-run):
+	// the engine plans, scans and analyses adoption exactly as a real run
+	// would, then reports what it WOULD migrate without writing a single byte
+	// to either server or a single mutation to the State Database. Distinct
+	// from CheckOnly (--check), which is the lightweight connect/list preflight.
+	DryRun bool
+
+	// Range is the resolved ISO 8601 INTERNALDATE selection window (feature:
+	// --from/--to). When Range.Active, only messages whose IMAP INTERNALDATE
+	// falls in [From,To] inclusive are migrated. Resolved to fixed instants at
+	// run creation (see ResolveRange) and persisted so a resume of the same run
+	// applies the identical window.
+	Range DateRange
 }
 
 // NewRunID: unique per invocation — timestamp plus random suffix, so
@@ -122,41 +137,52 @@ func Defaults() *Run {
 	}
 }
 
-// ParseCSV reads the wrapper-compatible mailbox CSV.
+// csvHeaders is the canonical v2 header, in order. Every column is required
+// and none may repeat, be misspelled or be unknown.
+var csvHeaders = []string{"srchost", "srcport", "srcsecurity", "srcuser", "srcpassword",
+	"dsthost", "dstport", "dstsecurity", "dstuser", "dstpassword"}
+
+// ParseCSV reads the wrapper-compatible mailbox CSV. The WHOLE file is
+// validated in one pass (see ValidateCSV): every problem is collected and
+// reported together, and no migration is ever started from a file with even
+// a single error — migrating real email demands the whole plan be sound
+// before the first connection.
 func ParseCSV(path string) ([]MailboxSpec, error) {
+	return ValidateCSV(path)
+}
+
+// ValidateCSV validates the entire mailbox CSV in a single pass and returns
+// the parsed specs only when the file is completely clean. On any problem it
+// returns ONE aggregated error listing every issue with its row number, so
+// operators fix everything at once instead of one-error-at-a-time. Passwords
+// are never echoed — offending values are referred to by column name only
+// (except the port value, which is not a secret and is quoted to help).
+func ValidateCSV(path string) ([]MailboxSpec, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 	r := csv.NewReader(f)
-	r.FieldsPerRecord = -1
+	r.FieldsPerRecord = -1 // count is validated per-row below, not by the reader
 	rows, err := r.ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("CSV parse error: %w", err)
+		// A reader error carries the offending line via *csv.ParseError; surface
+		// it as a single aggregated failure with the row number.
+		return nil, aggregateErrors(path, []string{csvReaderError(err)})
 	}
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("CSV is empty")
 	}
-	head := map[string]int{}
-	for i, h := range rows[0] {
-		head[strings.ToLower(strings.TrimSpace(h))] = i
+
+	// ---- header validation (missing / duplicate / unknown / obsolete) ----
+	head, headerErrs := validateHeader(rows[0])
+	if len(headerErrs) > 0 {
+		// The header defines the shape of every row; without a sound header the
+		// per-row checks are meaningless, so report header problems on their own.
+		return nil, aggregateErrors(path, headerErrs)
 	}
-	if _, obsolete := head["oldhost"]; obsolete {
-		return nil, fmt.Errorf("obsolete v1 CSV header detected (old*/new* columns). " +
-			"The canonical v2 header is:\n" +
-			"  srchost,srcport,srcsecurity,srcuser,srcpassword," +
-			"dsthost,dstport,dstsecurity,dstuser,dstpassword\n" +
-			"Rename the columns: old* -> src*, new* -> dst* (values are unchanged)")
-	}
-	need := []string{"srchost", "srcport", "srcsecurity", "srcuser", "srcpassword",
-		"dsthost", "dstport", "dstsecurity", "dstuser", "dstpassword"}
-	for _, n := range need {
-		if _, ok := head[n]; !ok {
-			return nil, fmt.Errorf("CSV missing required column %q (canonical v2 header: %s)",
-				n, strings.Join(need, ","))
-		}
-	}
+
 	get := func(row []string, key string) string {
 		i := head[key]
 		if i < len(row) {
@@ -164,57 +190,179 @@ func ParseCSV(path string) ([]MailboxSpec, error) {
 		}
 		return ""
 	}
-	port := func(row []string, key string, sec string) int {
-		p, err := strconv.Atoi(get(row, key))
-		if err == nil && p > 0 {
-			return p
+	// sec normalises the security token. The canonical inputs are none|ssl|
+	// starttls; the legacy alias "tls" is accepted silently and means STARTTLS
+	// (kept for wrapper compatibility). Internally STARTTLS is stored as "tls",
+	// exactly as before, so nothing downstream changes.
+	sec := func(raw string) (string, bool) {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "ssl":
+			return "ssl", true
+		case "none":
+			return "none", true
+		case "starttls", "tls":
+			return "tls", true
 		}
-		if sec == "ssl" {
-			return 993
-		}
-		return 143
+		return "", false
 	}
-	sec := func(s string) (string, error) {
-		s = strings.ToLower(s)
-		switch s {
-		case "ssl", "tls", "none":
-			return s, nil
-		case "starttls":
-			return "tls", nil
-		case "":
-			return "ssl", nil
+	// port parses the connection port; empty is allowed (a sensible default is
+	// chosen from the security), but a present-yet-invalid value is an error.
+	port := func(raw, sec string) (int, bool) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			if sec == "ssl" {
+				return 993, true
+			}
+			return 143, true
 		}
-		return "", fmt.Errorf("security must be ssl, tls or none (got %q)", s)
+		p, err := strconv.Atoi(raw)
+		if err != nil || p < 1 || p > 65535 {
+			return 0, false
+		}
+		return p, true
 	}
+
 	var out []MailboxSpec
+	var errs []string
 	for n, row := range rows[1:] {
+		lineNo := n + 2 // 1-based, +1 for the header row
 		if len(row) == 0 || (len(row) == 1 && strings.TrimSpace(row[0]) == "") {
-			continue
+			continue // empty rows are skipped silently, as before
 		}
-		ssec, err := sec(get(row, "srcsecurity"))
-		if err != nil {
-			return nil, fmt.Errorf("row %d: %w", n+2, err)
+		if len(row) != len(csvHeaders) {
+			errs = append(errs, fmt.Sprintf("Row %d: has %d column(s), expected %d "+
+				"(%s)", lineNo, len(row), len(csvHeaders), strings.Join(csvHeaders, ",")))
+			continue // a mis-shaped row cannot be trusted for value checks
 		}
-		dsec, err := sec(get(row, "dstsecurity"))
-		if err != nil {
-			return nil, fmt.Errorf("row %d: %w", n+2, err)
+		rowErrs := 0
+		// required non-empty values (passwords included; referred to by name)
+		for _, col := range csvHeaders {
+			if col == "srcport" || col == "dstport" || col == "srcsecurity" || col == "dstsecurity" {
+				continue // ports/security have their own dedicated checks below
+			}
+			if get(row, col) == "" {
+				errs = append(errs, fmt.Sprintf("Row %d: %s is empty (a value is required)", lineNo, col))
+				rowErrs++
+			}
 		}
-		spec := MailboxSpec{
+		ssec, sok := sec(get(row, "srcsecurity"))
+		if !sok {
+			errs = append(errs, fmt.Sprintf("Row %d: srcsecurity %q is invalid "+
+				"(expected: none, ssl, or starttls)", lineNo, get(row, "srcsecurity")))
+			rowErrs++
+		}
+		dsec, dok := sec(get(row, "dstsecurity"))
+		if !dok {
+			errs = append(errs, fmt.Sprintf("Row %d: dstsecurity %q is invalid "+
+				"(expected: none, ssl, or starttls)", lineNo, get(row, "dstsecurity")))
+			rowErrs++
+		}
+		sport, spok := port(get(row, "srcport"), ssec)
+		if !spok {
+			errs = append(errs, fmt.Sprintf("Row %d: srcport %q is invalid "+
+				"(expected: integer 1–65535)", lineNo, get(row, "srcport")))
+			rowErrs++
+		}
+		dport, dpok := port(get(row, "dstport"), dsec)
+		if !dpok {
+			errs = append(errs, fmt.Sprintf("Row %d: dstport %q is invalid "+
+				"(expected: integer 1–65535)", lineNo, get(row, "dstport")))
+			rowErrs++
+		}
+		if rowErrs > 0 {
+			continue // do not admit a row that carries any error
+		}
+		out = append(out, MailboxSpec{
 			Index: len(out) + 1,
-			Src: Endpoint{Host: get(row, "srchost"), Port: port(row, "srcport", ssec),
+			Src: Endpoint{Host: get(row, "srchost"), Port: sport,
 				Security: ssec, User: get(row, "srcuser"), Password: get(row, "srcpassword")},
-			Dst: Endpoint{Host: get(row, "dsthost"), Port: port(row, "dstport", dsec),
+			Dst: Endpoint{Host: get(row, "dsthost"), Port: dport,
 				Security: dsec, User: get(row, "dstuser"), Password: get(row, "dstpassword")},
-		}
-		if spec.Src.Host == "" || spec.Src.User == "" || spec.Dst.Host == "" || spec.Dst.User == "" {
-			return nil, fmt.Errorf("row %d: host/user columns must not be empty", n+2)
-		}
-		out = append(out, spec)
+		})
+	}
+	if len(errs) > 0 {
+		return nil, aggregateErrors(path, errs)
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("CSV has a header but no mailbox rows")
 	}
 	return out, nil
+}
+
+// validateHeader checks the header row exactly: every canonical column must
+// appear once, with no duplicates and no unknown columns. The obsolete v1
+// old*/new* header keeps its dedicated rename hint.
+func validateHeader(row []string) (map[string]int, []string) {
+	seen := map[string]int{}  // column -> times seen
+	first := map[string]int{} // column -> first index (used for the lookup map)
+	var order []string        // columns in file order (for unknown reporting)
+	for i, h := range row {
+		name := strings.ToLower(strings.TrimSpace(h))
+		seen[name]++
+		if _, ok := first[name]; !ok {
+			first[name] = i
+		}
+		order = append(order, name)
+	}
+	if _, obsolete := seen["oldhost"]; obsolete {
+		return nil, []string{"obsolete v1 CSV header detected (old*/new* columns).\n" +
+			"  The canonical v2 header is:\n" +
+			"    " + strings.Join(csvHeaders, ",") + "\n" +
+			"  Rename the columns: old* -> src*, new* -> dst* (values are unchanged)"}
+	}
+	known := map[string]bool{}
+	for _, c := range csvHeaders {
+		known[c] = true
+	}
+	var errs []string
+	for _, c := range csvHeaders {
+		switch seen[c] {
+		case 0:
+			errs = append(errs, fmt.Sprintf("Header: required column %q is missing "+
+				"(canonical v2 header: %s)", c, strings.Join(csvHeaders, ",")))
+		case 1:
+			// exactly once — good
+		default:
+			errs = append(errs, fmt.Sprintf("Header: column %q appears %d times "+
+				"(each column must appear exactly once)", c, seen[c]))
+		}
+	}
+	reported := map[string]bool{}
+	for _, name := range order {
+		if name == "" || known[name] || reported[name] {
+			continue
+		}
+		reported[name] = true
+		errs = append(errs, fmt.Sprintf("Header: unknown column %q "+
+			"(canonical v2 header: %s)", name, strings.Join(csvHeaders, ",")))
+	}
+	if len(errs) > 0 {
+		return nil, errs
+	}
+	return first, nil
+}
+
+// aggregateErrors renders the collected problems as ONE multi-line error in
+// the documented format. cmd/mailferry prints this verbatim and exits 1.
+func aggregateErrors(path string, errs []string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "CSV validation failed: %s\n", path)
+	fmt.Fprintf(&b, "%d error(s) found:\n", len(errs))
+	for _, e := range errs {
+		fmt.Fprintf(&b, "%s\n", e)
+	}
+	b.WriteString("Migration was not started.")
+	return fmt.Errorf("%s", b.String())
+}
+
+// csvReaderError turns an encoding/csv reader failure (typically malformed
+// quoting) into an operator-facing line naming the row where possible.
+func csvReaderError(err error) string {
+	var pe *csv.ParseError
+	if errors.As(err, &pe) {
+		return fmt.Sprintf("Row %d: malformed CSV — %v (check the quoting)", pe.Line, pe.Err)
+	}
+	return fmt.Sprintf("malformed CSV — %v (check the quoting)", err)
 }
 
 // FolderMap loads an explicit "Source = Destination" mapping file.

@@ -54,7 +54,8 @@ var commands = map[string]bool{"run": true, "resume": true, "check": true,
 	"validate": true, "doctor": true, "benchmark": true, "init": true,
 	"import-state": true, "capabilities": true, "verify": true, "compact": true,
 	"changelog": true, "roadmap": true, "status": true, "failed": true,
-	"retry-failed": true, "config": true, "version": true, "about": true}
+	"retry-failed": true, "config": true, "version": true, "about": true,
+	"dedup": true, "attach": true}
 
 // bootCfg is the file-configured baseline every command starts from.
 // mailferry.toml: sensible defaults that just work; the file only exists so
@@ -93,6 +94,9 @@ func ensureConfig(session func(string)) {
 }
 
 func bootstrapConfig(argv []string) []string {
+	// extract the global --portable flag first so every command sees it and
+	// the config location below resolves against the portable root.
+	argv = extractPortable(argv)
 	// extract --config PATH from anywhere in argv (Python-argparse parity)
 	explicit := ""
 	for i := 0; i < len(argv); i++ {
@@ -107,6 +111,12 @@ func bootstrapConfig(argv []string) []string {
 			break
 		}
 	}
+	// Portable precedence: an explicit --config always wins. Otherwise the
+	// portable root's mailferry.toml is authoritative — it resolves through the
+	// normal FindTOML path (paths.Default() is portable-aware), so it is
+	// auto-generated on the first operational run exactly like the native
+	// default, rather than being treated as a fixed --config (which is never
+	// auto-created).
 	bootCfg = config.Defaults()
 	bootExplicit = explicit
 	warns, path, _ := config.LoadTOML(bootCfg, explicit, false) // read-only
@@ -183,6 +193,10 @@ func run(argv []string) int {
 		return cmdFailed(rest)
 	case "retry-failed":
 		return cmdRetryFailed(rest)
+	case "dedup":
+		return cmdDedup(rest)
+	case "attach":
+		return cmdAttach(rest)
 	case "run", "resume", "check", "validate":
 		return cmdRun(cmd, rest)
 	}
@@ -202,8 +216,10 @@ Usage:
   mailferry check CSV            preflight: connect, auth, list, estimate — no writes
   mailferry validate CSV         alias of check
   mailferry status [--db PATH]   inspect a State Database (read-only, safe anytime)
+  mailferry attach [RUN-ID]      live read-only monitor of a running migration
   mailferry failed               list / export the Failed Message Registry
   mailferry retry-failed         re-queue registry entries for the next run
+  mailferry dedup CSV            find/quarantine destination duplicates (safe; --execute)
   mailferry verify CSV           compare per-folder counts: source vs destination vs state
   mailferry capabilities HOST PORT   probe a server's capabilities
   mailferry doctor               local environment self-test (no servers contacted)
@@ -221,6 +237,7 @@ Frequent flags: --workers N --db PATH (native per-user mailferry.db
   --retries N --retry-delay S --per-host-conns N --skip-completed
   --order csv|size --include GLOB --exclude GLOB --map FILE --sync-flags
   --compress auto|off --baseline --tls-no-verify --no-tui --trace --config PATH
+  --portable (run entirely from the executable's own directory)
 Run 'mailferry run -h' for the full list.
 
 Author:     ` + identity.Author + ` <` + identity.AuthorEmail + `>
@@ -327,7 +344,9 @@ func cmdRun(cmd string, rest []string) int {
 		traceF       = fs.Bool("trace", false, "Protocol-level trace in per-mailbox logs (credentials redacted)")
 		debugF       = fs.Bool("debug", false, "Verbose errors")
 		checkF       = fs.Bool("check", false, "Preflight only: connect, authenticate, list, estimate — write nothing")
-		dryRun       = fs.Bool("dry-run", false, "Alias of --check")
+		dryRun       = fs.Bool("dry-run", false, "Plan/scan a real run but write nothing (server + State DB read-only)")
+		fromF        = fs.String("from", "", "Only migrate messages on/after this ISO 8601 instant (INTERNALDATE)")
+		toF          = fs.String("to", "", "Only migrate messages on/before this ISO 8601 instant (INTERNALDATE)")
 		cfgPath      = fs.String("config", "", "Path to mailferry.toml (already applied at startup)")
 		workerTO     = fs.Float64("worker-timeout", 0, "Cluster worker offline threshold (s)")
 		msgRetries   = fs.Int("message-attempts", 0, "Transfer passes per message")
@@ -463,7 +482,27 @@ func cmdRun(cmd string, rest []string) int {
 	if *noSkipFailed {
 		cfg.SkipKnownFailed = false
 	}
-	cfg.CheckOnly = cmd == "check" || cmd == "validate" || *checkF || *dryRun
+	cfg.CheckOnly = cmd == "check" || cmd == "validate" || *checkF
+	// --dry-run is a full, read-only run: the engine plans, scans and reports
+	// exactly as a real run would, but every server mutation is blocked at the
+	// choke point (see imapx.Client.ReadOnly). It is NOT the same as --check
+	// (the lightweight connect/list preflight above). A dry run is also forced
+	// EPHEMERAL so the projection never mutates the persistent State Database —
+	// together these make a dry run provably side-effect-free on both sides.
+	cfg.DryRun = *dryRun
+	if cfg.DryRun {
+		cfg.Ephemeral = true
+	}
+
+	// Resolve the ISO 8601 --from/--to window ONCE, here, to fixed instants,
+	// before any file is opened or any connection is attempted, so a bad range
+	// fails instantly. time.Local is the zone applied to timezone-less inputs.
+	rng, rerr := config.ResolveRange(*fromF, *toF, time.Local)
+	if rerr != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", rerr)
+		return 2
+	}
+	cfg.Range = rng
 
 	specs, err := config.ParseCSV(cfg.CSVFile)
 	if err != nil {
@@ -472,6 +511,28 @@ func cmdRun(cmd string, rest []string) int {
 	}
 	if cfg.CheckOnly {
 		return runCheck(cfg, specs) // preflight: nothing written locally
+	}
+
+	// Portable precedence: portable beats a TOML database.path / logging
+	// directory, but an explicit --db / --logs-dir still wins. Clearing the
+	// TOML-derived value lets the resolvers below fall through to the portable
+	// root (paths.Default() is portable-aware). Then guard writability with a
+	// clear, actionable error for a read-only portable location.
+	if paths.PortableActive() {
+		if !flagWasSet(fs, "db") {
+			cfg.DBPath = ""
+		}
+		if !flagWasSet(fs, "logs-dir") {
+			cfg.LogsDir = ""
+		}
+		guardDirs := []string{paths.Default().LogsDir}
+		if !cfg.Ephemeral && cfg.DBPath == "" {
+			guardDirs = append(guardDirs, filepath.Dir(paths.Default().StateDB))
+		}
+		if err := portableWritableGuard(guardDirs...); err != nil {
+			fmt.Fprintln(os.Stderr, "ERROR:", err)
+			return 1
+		}
 	}
 
 	// First OPERATIONAL run: this is the point where configuration and
@@ -534,9 +595,18 @@ func cmdRun(cmd string, rest []string) int {
 		len(specs), cfg.Workers, stats.DBPath)
 	fmt.Printf("Run %s · worker %s — multiple MailFerry processes may share this "+
 		"State Database safely\n", cfg.RunID, state.ShortWorker(state.LeaseOwnerID()))
-	session.Log(fmt.Sprintf("=== %s — run %s start: csv=%s rows=%d workers=%d db=%s%s%s",
+	if cfg.DryRun {
+		fmt.Println(progress.C("DRY RUN — planning and scanning only; nothing will be "+
+			"written to either server or the State Database.", "yellow"))
+	}
+	if cfg.Range.Active {
+		fmt.Printf("Date range: %s\n", cfg.Range.Label())
+	}
+	session.Log(fmt.Sprintf("=== %s — run %s start: csv=%s rows=%d workers=%d db=%s%s%s%s%s",
 		identity.BannerLine(), cfg.RunID, stats.CSVFile, len(specs), cfg.Workers, stats.DBPath,
-		map[bool]string{true: " force"}[cfg.Force], map[bool]string{true: " ephemeral"}[cfg.Ephemeral]))
+		map[bool]string{true: " force"}[cfg.Force], map[bool]string{true: " ephemeral"}[cfg.Ephemeral],
+		map[bool]string{true: " dry-run"}[cfg.DryRun],
+		map[bool]string{true: " range=" + cfg.Range.Label()}[cfg.Range.Active]))
 
 	// Automatic terminal detection: interactive TTY -> Bubble Tea TUI;
 	// non-interactive or --no-tui -> headless. Both drive the SAME engine.
@@ -1184,13 +1254,25 @@ func cmdConfig(rest []string) int {
 		}
 		cfgPath, _ := config.FindTOML(bootExplicit)
 		dbPath, _ := resolveStateDB("")
+		if paths.PortableActive() {
+			fmt.Println(progress.C("(portable mode — everything lives beside the executable: "+
+				paths.PortableRoot()+")", "cyan"))
+			fmt.Println()
+		}
 		fmt.Printf("Configuration : %s%s\n", cfgPath, mark(cfgPath))
 		fmt.Printf("State Database: %s%s\n", dbPath, mark(dbPath))
 		fmt.Printf("Logs          : %s%s\n", p.LogsDir, mark(p.LogsDir))
 		fmt.Printf("Cache         : %s%s\n", p.CacheDir, mark(p.CacheDir))
-		fmt.Println("\nPrecedence: CLI flags (--config/--db/--logs-dir) > mailferry.toml >")
-		fmt.Println("native OS default. Everything is created lazily, only when an")
-		fmt.Println("operation needs it — informational commands never create files.")
+		if paths.PortableActive() {
+			fmt.Println("\nPrecedence: CLI flags (--config/--db/--logs-dir) > portable " +
+				"(--portable) >")
+			fmt.Println("mailferry.toml > native OS default. Everything is created lazily, only")
+			fmt.Println("when an operation needs it — informational commands never create files.")
+		} else {
+			fmt.Println("\nPrecedence: CLI flags (--config/--db/--logs-dir) > mailferry.toml >")
+			fmt.Println("native OS default. Everything is created lazily, only when an")
+			fmt.Println("operation needs it — informational commands never create files.")
+		}
 		return 0
 	}
 	fs := flag.NewFlagSet("config", flag.ExitOnError)

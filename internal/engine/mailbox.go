@@ -467,6 +467,7 @@ func (r *MailboxRunner) openPair() error {
 	for _, c := range []*imapx.Client{r.src, r.dst} {
 		c.Trace = r.Cfg.Trace
 		c.Baseline = r.Cfg.Baseline
+		c.ReadOnly = r.Cfg.DryRun // --dry-run: the client blocks every mutation
 	}
 	r.cliMu.Unlock()
 	type res struct{ err error }

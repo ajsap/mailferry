@@ -95,6 +95,25 @@ func (f *Folder) Add(body []byte, flags []string, internalDate string) *Msg {
 	return m
 }
 
+// remove deletes the given messages from the folder (UID MOVE source side).
+// The messages are rehomed, not lost — MOVE is a relocation, not a purge.
+func (f *Folder) remove(victims []*Msg) {
+	if len(victims) == 0 {
+		return
+	}
+	drop := map[*Msg]bool{}
+	for _, m := range victims {
+		drop[m] = true
+	}
+	kept := f.Msgs[:0]
+	for _, m := range f.Msgs {
+		if !drop[m] {
+			kept = append(kept, m)
+		}
+	}
+	f.Msgs = kept
+}
+
 func (f *Folder) bySet(set string) []*Msg {
 	var out []*Msg
 	for _, part := range strings.Split(set, ",") {
@@ -182,6 +201,11 @@ type Server struct {
 	AppendCount   atomic.Int64
 	FetchBodyN    atomic.Int64
 	KillCount     atomic.Int64
+	CopyCount     atomic.Int64 // UID COPY commands honoured (dedup quarantine)
+	MoveCount     atomic.Int64 // UID MOVE commands honoured (dedup quarantine)
+	ExpungeCount  atomic.Int64 // EXPUNGE commands seen — dedup must keep this 0
+	NoMove        atomic.Bool  // hide the MOVE capability (force copy+flag path)
+	CopyDelayMS   atomic.Int64 // artificial per-COPY/MOVE latency (dedup cancel tests)
 	AppendReject  []byte       // bodies containing this get "NO APPEND failed"
 	AppendKill    []byte       // bodies containing this kill the connection
 	AppendDelayMS atomic.Int64 // artificial per-append latency (slow-server tests)
@@ -203,10 +227,26 @@ func (s *Server) StoreEvents() []string {
 	return append([]string(nil), s.StoreLog...)
 }
 
+// capString renders the advertised capability list, honouring NoMove so
+// tests can force the copy+flag quarantine path on MOVE-less servers.
+func (s *Server) capString() string {
+	if !s.NoMove.Load() {
+		return strings.Join(s.Caps, " ")
+	}
+	var out []string
+	for _, c := range s.Caps {
+		if strings.EqualFold(c, "MOVE") {
+			continue
+		}
+		out = append(out, c)
+	}
+	return strings.Join(out, " ")
+}
+
 func NewServer(accounts ...*Account) *Server {
 	s := &Server{Accounts: map[string]*Account{},
 		Caps: []string{"IMAP4rev1", "UIDPLUS", "LITERAL+", "NAMESPACE",
-			"SPECIAL-USE", "ID", "UNSELECT", "COMPRESS=DEFLATE"}}
+			"SPECIAL-USE", "ID", "UNSELECT", "COMPRESS=DEFLATE", "MOVE"}}
 	for _, a := range accounts {
 		s.Accounts[a.User] = a
 	}
@@ -281,7 +321,7 @@ func (s *Server) client(conn net.Conn) {
 		}
 		return err == nil
 	}
-	send("* OK [CAPABILITY " + strings.Join(s.Caps, " ") + "] fake server ready")
+	send("* OK [CAPABILITY " + s.capString() + "] fake server ready")
 	for {
 		raw, err := br.ReadString('\n')
 		if err != nil {
@@ -325,7 +365,7 @@ func (s *Server) client(conn net.Conn) {
 		}
 		switch verb {
 		case "CAPABILITY":
-			send("* CAPABILITY " + strings.Join(s.Caps, " "))
+			send("* CAPABILITY " + s.capString())
 			send(tag + " OK done")
 		case "NOOP":
 			send(tag + " OK done")
@@ -354,7 +394,7 @@ func (s *Server) client(conn net.Conn) {
 			if len(t) >= 2 {
 				if a := s.Accounts[t[0]]; a != nil && a.Password == t[1] {
 					acct = a
-					send(tag + " OK [CAPABILITY " + strings.Join(s.Caps, " ") + "] logged in")
+					send(tag + " OK [CAPABILITY " + s.capString() + "] logged in")
 					continue
 				}
 			}
@@ -514,6 +554,45 @@ func (s *Server) client(conn net.Conn) {
 					}
 				}
 				send(tag + " OK done")
+			case "UID COPY", "UID MOVE":
+				if selected == nil {
+					send(tag + " NO nothing selected")
+					continue
+				}
+				cset, destName, _ := strings.Cut(rest, " ")
+				dest := acct.Folder(unquote(destName))
+				if dest == nil {
+					// RFC 3501/6851: point the client at TRYCREATE so it can
+					// CREATE the quarantine folder and retry.
+					send(tag + " NO [TRYCREATE] no such destination mailbox")
+					continue
+				}
+				msgs := selected.bySet(cset)
+				if d := s.CopyDelayMS.Load(); d > 0 {
+					time.Sleep(time.Duration(d) * time.Millisecond)
+				}
+				acct.mu.Lock()
+				for _, m := range msgs {
+					dest.Add(append([]byte(nil), m.Body...), flagsOf(m), m.InternalDate)
+				}
+				if verb == "UID MOVE" {
+					selected.remove(msgs)
+				}
+				acct.mu.Unlock()
+				if verb == "UID MOVE" {
+					s.MoveCount.Add(int64(len(msgs)))
+					// RFC 6851: an atomic rehome of retained mail, not a
+					// destructive EXPUNGE.
+					send(tag + " OK move done")
+				} else {
+					s.CopyCount.Add(int64(len(msgs)))
+					send(tag + " OK copy done")
+				}
+			case "EXPUNGE", "UID EXPUNGE":
+				// Recorded so dedup tests can assert it is NEVER issued —
+				// permanent deletion is not part of the reversible design.
+				s.ExpungeCount.Add(1)
+				send(tag + " OK expunge done")
 			case "APPEND":
 				head := strings.Split(rest, "\x00LIT\x00")[0]
 				t := toks(head)
@@ -567,6 +646,27 @@ func (s *Server) client(conn net.Conn) {
 			}
 		}
 	}
+}
+
+// unquote strips one layer of IMAP double-quoting from a mailbox argument.
+func unquote(s string) string {
+	t := toks(s)
+	if len(t) > 0 {
+		return t[0]
+	}
+	return s
+}
+
+// flagsOf returns a message's flags as a slice (\Recent is never persisted),
+// so a COPY/MOVE preserves the message's own flags on the quarantine copy.
+func flagsOf(m *Msg) []string {
+	var out []string
+	for f := range m.Flags {
+		if !strings.EqualFold(f, `\Recent`) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func readFull(br *bufio.Reader, buf []byte) (int, error) {

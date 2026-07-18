@@ -74,6 +74,13 @@ CREATE TABLE IF NOT EXISTS failed_messages(
   fail_count INTEGER DEFAULT 0, recovered_ts REAL DEFAULT 0,
   status TEXT DEFAULT 'FAILED',
   UNIQUE(mailbox_id, folder, src_uid));
+CREATE TABLE IF NOT EXISTS run_ranges(
+  run_id TEXT PRIMARY KEY, from_utc TEXT DEFAULT '', to_utc TEXT DEFAULT '',
+  tz TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS dedup_state(
+  mailbox_id INTEGER, folder TEXT, duplicate_uid INTEGER,
+  keeper_uid INTEGER, action TEXT, done INTEGER,
+  PRIMARY KEY(mailbox_id, folder, duplicate_uid));
 `
 
 // LeaseOwnerID: unique Worker ID hostname:pid:uuid.
@@ -152,6 +159,40 @@ func (d *DB) EndRun(runID, result string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.con.Exec("UPDATE runs SET finished=?, result=? WHERE id=?", now(), result, runID)
+}
+
+// rangeKey is the fixed row key under which the ISO 8601 date-range window is
+// stored. It is DB-WIDE, not per-invocation: a State Database represents one
+// migration, and the window must survive across resume invocations (each of
+// which gets a fresh RunID). Keying on a constant makes LoadRange find the
+// window a later resume must honour, regardless of the resume's RunID.
+const rangeKey = "__migration__"
+
+// SaveRange persists the resolved ISO 8601 date-range window for this State
+// Database ONCE. INSERT OR IGNORE means the first write wins — a resume never
+// overwrites the window it must honour, even if different --from/--to flags are
+// supplied again. from/to are RFC 3339 UTC ("" = unbounded on that side). An
+// inactive range (both empty) is not stored, so an unrestricted first run does
+// not pin later resumes to "no range".
+func (d *DB) SaveRange(fromUTC, toUTC, tz string) {
+	if fromUTC == "" && toUTC == "" {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.con.Exec("INSERT OR IGNORE INTO run_ranges(run_id, from_utc, to_utc, tz) "+
+		"VALUES(?,?,?,?)", rangeKey, fromUTC, toUTC, tz)
+}
+
+// LoadRange returns the persisted DB-wide window and whether one was stored. On
+// resume the stored range wins over any flags supplied again, so the selection
+// is identical to the original run.
+func (d *DB) LoadRange() (fromUTC, toUTC, tz string, found bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	err := d.con.QueryRow("SELECT from_utc, to_utc, tz FROM run_ranges WHERE run_id=?",
+		rangeKey).Scan(&fromUTC, &toUTC, &tz)
+	return fromUTC, toUTC, tz, err == nil
 }
 
 // ------------------------------------------------------------ mailboxes --
@@ -717,6 +758,19 @@ type StatusReport struct {
 	Outstanding   int64
 	Workers       []WorkerRow
 	RunningLabels []string
+	// Mailboxes carries a per-mailbox row for live monitors (e.g. the
+	// `mailferry attach` read-only view). Additive: existing callers that
+	// only read the aggregate counters are unaffected.
+	Mailboxes []MailboxRow
+}
+
+// MailboxRow is a per-mailbox status snapshot for read-only monitors.
+type MailboxRow struct {
+	Label  string
+	Status string
+	Done   int64
+	Total  int64
+	Failed int64
 }
 
 func (d *DB) Status(offlineAfter float64) StatusReport {
@@ -750,6 +804,21 @@ func (d *DB) Status(offlineAfter float64) StatusReport {
 		Scan(&rep.MsgsDone, &rep.MsgsTotal, &rep.BytesDone, &rep.BytesTotal)
 	d.con.QueryRow("SELECT COUNT(*) FROM failed_messages " +
 		"WHERE status IN ('FAILED','RETRY_PENDING','RETRYING')").Scan(&rep.Outstanding)
+	// Per-mailbox rows for read-only monitors: done/total from the mailbox
+	// aggregates, outstanding-failed joined from the registry.
+	mrows, merr := d.con.Query(`SELECT m.src_user, m.status,
+COALESCE(m.msgs_done,0), COALESCE(m.msgs_total,0),
+(SELECT COUNT(*) FROM failed_messages f WHERE f.mailbox_id=m.id
+ AND f.status IN ('FAILED','RETRY_PENDING','RETRYING'))
+FROM mailboxes m ORDER BY m.id`)
+	if merr == nil {
+		for mrows.Next() {
+			var mr MailboxRow
+			mrows.Scan(&mr.Label, &mr.Status, &mr.Done, &mr.Total, &mr.Failed)
+			rep.Mailboxes = append(rep.Mailboxes, mr)
+		}
+		mrows.Close()
+	}
 	d.mu.Unlock()
 	rep.Workers = d.ListWorkers(offlineAfter)
 	return rep

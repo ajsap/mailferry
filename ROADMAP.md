@@ -10,12 +10,11 @@ The canonical roadmap also ships in the binary: `mailferry roadmap`.
   failed-message isolation with a persistent registry and COMPLETED WITH
   WARNINGS, multi-instance clustering with failover, live wire-speed
   metering, mailferry.toml. Never published as a release.
-- [ ] **v2.0.0** — Complete architectural rewrite in Go (this
+- [x] **v2.0.0** — Complete architectural rewrite in Go (this
   repository): single static cross-platform binary, goroutine-based
   concurrent engine, plus destination deduplication and date-range
-  migration modes. Release candidates (`v2.0.0-rc.N`) are published
-  as GitHub pre-releases for field validation; v2.0.0 final ships only
-  after that validation completes.
+  migration modes. Released as the stable v2.0.0 after three public/internal
+  release candidates and a full verification gate.
 - [ ] **v2.1.0** — Performance: MULTIAPPEND batching and
   QRESYNC/CONDSTORE delta sync; OAuth 2.0 (XOAUTH2 / OAUTHBEARER);
   Prometheus-style metrics.
