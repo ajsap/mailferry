@@ -47,7 +47,7 @@ Per release, for each of `darwin-arm64` and `darwin-amd64` (or a universal
 binary, §4):
 
 ```sh
-# 0. Reproducible build (already done by go/build.sh: CGO_ENABLED=0,
+# 0. Reproducible build (already done by build.sh: CGO_ENABLED=0,
 #    -trimpath, -ldflags "-s -w -buildid=", pinned Go toolchain).
 
 # 1. Sign with Developer ID + hardened runtime + secure timestamp,
@@ -150,7 +150,7 @@ spctl --assess --type execute -vv ./mailferry-v2.0.0-darwin-arm64   # notarisati
 
 ## 6. Reproducibility
 
-`go/build.sh` builds with `CGO_ENABLED=0 -trimpath -ldflags "-s -w
+`build.sh` builds with `CGO_ENABLED=0 -trimpath -ldflags "-s -w
 -buildid="`; with the same Go toolchain version, two builds of the same
 commit produce byte-identical binaries **before signing** (signing adds
 the CMS blob, so verify reproducibility on the unsigned artefacts and

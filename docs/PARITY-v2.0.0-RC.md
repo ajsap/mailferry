@@ -1,7 +1,9 @@
 # MailFerry v2.0.0 RC — Python → Go Feature-Parity Matrix
 
 Audit date: 2026-07-18 · Auditor: full source inspection (final Python
-tree at `mailferry/`, Go tree at `go/`), not documentation.
+tree, Go tree), not documentation. Paths reflect the pre-transition
+layout audited on 2026-07-18; the Python tree now lives on the
+`legacy/python-final` branch and the Go module is at the repository root.
 
 Reference columns:
 

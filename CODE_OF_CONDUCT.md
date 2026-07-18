@@ -14,19 +14,19 @@ diverse, inclusive, and healthy community.
 
 ## Our Standards
 
-Examples of behavior that contributes to a positive environment include:
+Examples of behaviour that contributes to a positive environment include:
 
 - Demonstrating empathy and kindness toward other people
 - Being respectful of differing opinions, viewpoints, and experiences
 - Giving and gracefully accepting constructive feedback
-- Accepting responsibility and apologizing to those affected by our
+- Accepting responsibility and apologising to those affected by our
   mistakes, and learning from the experience
 - Focusing on what is best not just for us as individuals, but for the
   overall community
 
-Examples of unacceptable behavior include:
+Examples of unacceptable behaviour include:
 
-- The use of sexualized language or imagery, and sexual attention or
+- The use of sexualised language or imagery, and sexual attention or
   advances of any kind
 - Trolling, insulting or derogatory comments, and personal or political
   attacks
@@ -39,8 +39,8 @@ Examples of unacceptable behavior include:
 ## Enforcement Responsibilities
 
 Community leaders are responsible for clarifying and enforcing our standards
-of acceptable behavior and will take appropriate and fair corrective action
-in response to any behavior that they deem inappropriate, threatening,
+of acceptable behaviour and will take appropriate and fair corrective action
+in response to any behaviour that they deem inappropriate, threatening,
 offensive, or harmful.
 
 ## Scope
@@ -51,7 +51,7 @@ spaces.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be
+Instances of abusive, harassing, or otherwise unacceptable behaviour may be
 reported to the community leader responsible for enforcement:
 **Andy Saputra** <andy@saputra.org>. All complaints will be reviewed and
 investigated promptly and fairly. All community leaders are obligated to

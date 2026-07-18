@@ -20,8 +20,6 @@ Remaining before the final v2.0.0 release:
   (docs/RELEASING-MACOS.md) — RC binaries are not signed with a
   Developer ID and not notarised.
 - Published Python-vs-Go benchmark comparison; release automation.
-- Repository transition at final v2.0.0 (Go tree to the repository root,
-  Python reference preserved on a legacy branch).
 
 ## [2.0.0-rc.1] - 2026-07-18
 
@@ -36,9 +34,10 @@ expunges or deletes mail on either server.
 MailFerry v2.0.0 is a ground-up rewrite in Go: a single static,
 cross-platform binary (macOS arm64/amd64, Linux amd64/arm64, Windows
 amd64/arm64) with no runtime dependencies — no Python, no Perl, no
-imapsync. The unreleased Python development line below (1.2.0-dev) is the
-behavioural reference; the Go engine reached functional parity with it in
-this release candidate (audit: docs/PARITY-v2.0.0-RC.md). Milestones:
+imapsync. The unreleased Python development line (1.2.0-dev, preserved on the
+`legacy/python-final` branch) is the behavioural reference; the Go engine
+reached functional parity with it in this release candidate (audit:
+docs/PARITY-v2.0.0-RC.md). Milestones:
 
 - **M1 (complete)** — native Go IMAP core (pipelined, streamed literals,
   LITERAL+, STARTTLS/TLS, watchdogs), byte-compatible State Database and
@@ -90,7 +89,7 @@ this release candidate (audit: docs/PARITY-v2.0.0-RC.md). Milestones:
   - Privacy: all test fixtures, examples, comments and screenshots now
     use RFC-2606 example domains only.
   - Release naming corrected to `mailferry-v2.0.0-<os>-<arch>`
-    (the RC's `-m2` suffix read as "Apple M2 only"); `go/build.sh` is the
+    (the RC's `-m2` suffix read as "Apple M2 only"); `build.sh` is the
     reproducible six-target build; macOS Gatekeeper analysis and the
     Developer ID signing/notarisation pipeline are documented in
     `docs/RELEASING-MACOS.md` (the RC prompt is expected behaviour for an
@@ -120,6 +119,18 @@ this release candidate (audit: docs/PARITY-v2.0.0-RC.md). Milestones:
   worker heartbeats / REMOTE progress mirroring / offline-worker takeover.
   New **`status`** command reads run/worker/registry state without
   competing with active workers. Six static binaries build CGO-free.
+
+### Changed
+
+- **Repository transition: the Go implementation is canonical for v2.**
+  The Go module moved from `go/` to the repository root (`go build
+  ./cmd/mailferry` works straight after cloning); the Python
+  implementation was removed from `main` and preserved permanently on
+  the `legacy/python-final` branch (plus the untouched `v1.0.0` tag).
+  The embedded changelog now comes from the single root `CHANGELOG.md`
+  via `go:embed` — no duplicated copies. Every source file carries the
+  standard authorship/SPDX header, enforced by an automated test.
+
 ### Known limitations of this release candidate
 
 - Deduplication mode, date-range migration and `mailferry attach` are

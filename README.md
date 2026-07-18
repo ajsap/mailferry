@@ -37,9 +37,10 @@ in an SQLite database so every run is resumable and duplicate-free.
 | TUI | hand-rolled ANSI | Bubble Tea + Lip Gloss, compiled in |
 | State | SQLite | SQLite (pure Go driver, **no CGO**) — same schema, byte-compatible fingerprints |
 
-The final (unreleased) Python development line is preserved in-tree under
-`mailferry/` as the behavioural reference; the Go engine reached feature
-parity with it before this RC (see `docs/PARITY-v2.0.0-RC.md`).
+The final (unreleased) Python development line is preserved on the
+permanent `legacy/python-final` branch as the behavioural reference; the
+Go engine reached feature parity with it before this RC (see
+`docs/PARITY-v2.0.0-RC.md`).
 
 ## Feature status in v2.0.0-rc.1
 
@@ -101,8 +102,9 @@ Targets: `darwin-arm64` (all Apple Silicon), `darwin-amd64` (Intel Macs),
 > final releases is documented in `docs/RELEASING-MACOS.md`. Never
 > disable Gatekeeper for MailFerry or anything else.
 
-Building from source instead: Go 1.22+, `cd go && ./build.sh` (builds all
-six targets reproducibly: `CGO_ENABLED=0 -trimpath`).
+Building from source instead: Go 1.22+, then `go build ./cmd/mailferry`
+from the repository root — or `./build.sh` for all six release targets
+(reproducible: `CGO_ENABLED=0 -trimpath`).
 
 ## Quick start
 
@@ -231,12 +233,29 @@ state.
 
 ## Repository layout
 
+The repository root is the canonical Go module — normal Go conventions
+work directly after cloning:
+
+```sh
+git clone https://github.com/ajsap/mailferry
+cd mailferry
+go build ./cmd/mailferry     # or: ./build.sh for all six release targets
+go test ./...
 ```
-go/          the Go engine (v2.0.0-rc.1) — cd go && ./build.sh
-mailferry/   final Python reference line (1.2.0-dev, unreleased)
-tests/       Python reference test suites
-docs/        documentation, parity audit, macOS release pipeline
+
 ```
+cmd/mailferry/   the mailferry command
+internal/        engine, IMAP client, TUI, state, config, reports…
+docs/            parity audit, macOS release pipeline, CSV format
+build.sh         reproducible six-target release build
+```
+
+**Where is the Python implementation?** v1.0.0 (the original Python
+release) lives at the `v1.0.0` tag, and the final unreleased Python
+development line (1.2.0-dev — the behavioural reference for this
+rewrite) is preserved permanently on the
+[`legacy/python-final`](https://github.com/ajsap/mailferry/tree/legacy/python-final)
+branch. Nothing was discarded; `main` is Go-only from v2 onward.
 
 ## Licence
 
