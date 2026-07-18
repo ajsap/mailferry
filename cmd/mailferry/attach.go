@@ -85,6 +85,8 @@ func cmdAttach(rest []string) int {
 
 	fmt.Println(identity.BannerLine())
 	model := tui.NewAttachModel(poller)
+	restoreTerm := captureTerminal()
+	defer restoreTerm() // same guarantee as the main TUI
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		// The monitor is a pure reader; if the TUI cannot start, fall back to

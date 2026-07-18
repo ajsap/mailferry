@@ -12,11 +12,11 @@ binary speaks IMAP directly to both servers, streams messages
 source-to-destination with bounded memory, and records per-message state
 in an SQLite database so every run is resumable and duplicate-free.
 
-> **Release status: `v2.0.0` (stable).**
+> **Release status: `v2.0.1` (stable).**
 > v1.0.0 was the original Python implementation; development continued
 > unreleased after it and served as the behavioural reference for the
-> complete native Go rewrite that is v2. Release candidates exist for
-> real-world testing before v2.0.0 is declared production-ready.
+> complete native Go rewrite that is v2, released as stable v2.0.0
+> after a three-candidate RC programme.
 > Test carefully and keep your source mailboxes until you have verified
 > the results. MailFerry never expunges or deletes mail on either server,
 > in any mode.
@@ -101,8 +101,8 @@ checksum, make it executable, run it. There is nothing else to install.
 
 ```sh
 shasum -a 256 -c SHA256SUMS          # verify (macOS: shasum, Linux: sha256sum)
-chmod +x mailferry-v2.0.0-darwin-arm64
-./mailferry-v2.0.0-darwin-arm64 version
+chmod +x mailferry-v2.0.1-darwin-arm64
+./mailferry-v2.0.1-darwin-arm64 version
 ```
 
 Targets: `darwin-arm64` (all Apple Silicon), `darwin-amd64` (Intel Macs),
@@ -259,10 +259,8 @@ state.
   silence with `--ignore`), `mailferry retry-failed` re-queues entries;
   successes become RECOVERED.
 
-## Known RC limitations
+## Known limitations
 
-- Deduplication mode, date-range migration and `mailferry attach` are
-  **not implemented** in this RC (planned for final v2.0.0).
 - macOS binaries are unsigned / not notarised (see Installation).
 - Clustering and COMPRESS=DEFLATE are implemented and tested against the
   automated suite but still under real-world validation; `--compress off`

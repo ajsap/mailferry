@@ -670,6 +670,29 @@ func flagWasSet(fs *flag.FlagSet, name string) bool {
 
 const graceSeconds = 6 // bounded escalation after a graceful stop request
 
+// captureTerminal snapshots the exact terminal state before a TUI takes
+// over and returns a restorer that reinstates it verbatim. Bubble Tea
+// restores on every normal path (verified by the exit-path matrix in
+// tools/ptyprobe-derived tests); this converts that expectation into a
+// GUARANTEE for every current and future return path — including TUI
+// startup failures and third-party edge cases — without reverting or
+// weakening the hard-stop fix. The restorer also re-enables cursor +
+// primary screen and disables mouse reporting defensively; those
+// sequences are idempotent no-ops on an already-clean terminal.
+func captureTerminal() func() {
+	fd := int(os.Stdin.Fd())
+	st, err := term.GetState(fd)
+	if err != nil {
+		return func() {}
+	}
+	return func() {
+		_ = term.Restore(fd, st)
+		// leave alternate screen, show cursor, reset attributes and
+		// mouse reporting — harmless when already clean
+		fmt.Fprint(os.Stdout, "[?1002l[?1003l[?1006l[?1049l[?25h[0m")
+	}
+}
+
 // escalate closes every connection if the engine hasn't unwound within the
 // grace window, so shutdown never hangs on a stalled socket.
 func escalate(bus *engine.Bus, session *report.Session, done <-chan struct{}) {
@@ -726,10 +749,13 @@ func runInteractive(ctx context.Context, cancel context.CancelFunc,
 	}
 	model := tui.New(stats, bus, gracefulStop, hardStop,
 		time.Duration(cfg.RefreshMS)*time.Millisecond, done)
+	restoreTerm := captureTerminal()
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	if _, err := p.Run(); err != nil {
+	_, runUIErr := p.Run()
+	restoreTerm() // guarantee: cooked mode + primary screen on EVERY path
+	if runUIErr != nil {
 		// TUI failed: never abort the migration — fall back to waiting headless
-		fmt.Fprintln(os.Stderr, "note: TUI unavailable (", err, ") — continuing headless")
+		fmt.Fprintln(os.Stderr, "note: TUI unavailable (", runUIErr, ") — continuing headless")
 	}
 	// terminal is restored here; bound the engine wait after a hard stop
 	if hardRequested {

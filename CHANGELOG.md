@@ -13,6 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notarised.
 - OAuth 2.0, MULTIAPPEND, QRESYNC, quarantine purge (v2.1.0).
 
+## [2.0.1] - 2026-07-19
+
+Patch release: terminal-state restoration guarantee.
+
+### Fixed
+
+- **Terminal restoration is now a guaranteed invariant, not an
+  expectation.** The exact pre-TUI terminal state is captured before
+  Bubble Tea takes over (both the migration TUI and `mailferry attach`)
+  and restored verbatim on every return path — including TUI startup
+  failures and the bounded hard-stop timeout — followed by idempotent
+  defensive resets (leave alternate screen, show cursor, disable mouse
+  reporting, reset attributes). Verified by a PTY termios matrix across
+  nine exit paths (normal/instant completion, graceful Ctrl+C, double
+  Ctrl+C, SIGTERM, SIGHUP, --dry-run, attach quit/Ctrl+C): no path
+  leaves the terminal without newline translation (the "stair-step"
+  artefact), raw input mode, or hidden echo. The v2.0.0-rc.3 hard-stop
+  correction is preserved unchanged; released rc.2/rc.3/v2.0.0 binaries
+  were bracketed with the same matrix and showed no reproducible leak
+  on these paths — this release closes the class permanently, including
+  platform edge cases beyond the test environment.
+
 ## [2.0.0] - 2026-07-19
 
 **Stable release** of the complete native Go rewrite — the culmination
@@ -533,7 +555,8 @@ Engine.
   suite (34 checks).
 - Packaging: standalone `mailferry.pyz` (zipapp), source archive, wheel.
 
-[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/ajsap/mailferry/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.3...v2.0.0
 [2.0.0-rc.3]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.2...v2.0.0-rc.3
 [2.0.0-rc.2]: https://github.com/ajsap/mailferry/compare/v1.0.0...v2.0.0-rc.2
