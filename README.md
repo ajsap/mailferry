@@ -1,6 +1,6 @@
 # MailFerry — IMAP Migration & Sync
 
-**A High-Performance Native IMAP Migration Engine**
+**High-Performance Native IMAP Migration Engine**
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/ajsap/mailferry?include_prereleases&sort=semver)](https://github.com/ajsap/mailferry/releases)
@@ -12,9 +12,10 @@ binary speaks IMAP directly to both servers, streams messages
 source-to-destination with bounded memory, and records per-message state
 in an SQLite database so every run is resumable and duplicate-free.
 
-> **Release status: `v2.0.0-rc.1` (Release Candidate — pre-release).**
-> v1.0.0 was the original Python implementation. v2.0.0 is a complete
-> native Go rewrite; `v2.0.0-rc.1` makes it publicly available for
+> **Release status: `v2.0.0-rc.2` (Release Candidate — pre-release).**
+> v1.0.0 was the original Python implementation; development continued
+> unreleased after it and served as the behavioural reference for the
+> complete native Go rewrite that is v2. Release candidates exist for
 > real-world testing before v2.0.0 is declared production-ready.
 > Test carefully and keep your source mailboxes until you have verified
 > the results. MailFerry never expunges or deletes mail on either server,
@@ -42,7 +43,7 @@ permanent `legacy/python-final` branch as the behavioural reference; the
 Go engine reached feature parity with it before this RC (see
 `docs/PARITY-v2.0.0-RC.md`).
 
-## Feature status in v2.0.0-rc.1
+## Feature status in v2.0.0-rc.2
 
 **Implemented** (covered by the automated suite):
 
@@ -60,8 +61,8 @@ Go engine reached feature parity with it before this RC (see
 - Interactive TUI (ten F1–F10 views incl. live dashboard, History,
   follow-mode Logs), automatic TTY detection, `--no-tui` headless mode,
   `status` read-only inspection, graceful shutdown with bounded escalation
-- Multi-instance clustering: several MailFerry processes share one
-  migration.db, mailboxes are claimed atomically, offline workers are
+- Multi-instance clustering: several MailFerry processes share one State
+  Database, mailboxes are claimed atomically, offline workers are
   reclaimed automatically *(implemented + tested; still under real-world
   validation at RC stage — see Known limitations)*
 - mailferry.toml configuration (auto-generated, documented, never fatal)
@@ -86,21 +87,19 @@ checksum, make it executable, run it. There is nothing else to install.
 
 ```sh
 shasum -a 256 -c SHA256SUMS          # verify (macOS: shasum, Linux: sha256sum)
-chmod +x mailferry-v2.0.0-rc.1-darwin-arm64
-./mailferry-v2.0.0-rc.1-darwin-arm64 version
+chmod +x mailferry-v2.0.0-rc.2-darwin-arm64
+./mailferry-v2.0.0-rc.2-darwin-arm64 version
 ```
 
 Targets: `darwin-arm64` (all Apple Silicon), `darwin-amd64` (Intel Macs),
 `linux-amd64`, `linux-arm64`, `windows-amd64.exe`, `windows-arm64.exe`.
 
-> **macOS Gatekeeper (RC):** the RC binaries are **not Developer-ID
-> signed and not notarised** (the arm64 build carries only the Go
-> linker's ad-hoc signature). A browser-downloaded copy will therefore
-> be blocked until you approve it under **System Settings → Privacy &
-> Security → Open Anyway**. That is Gatekeeper working as designed for
-> unsigned downloads; the production signing/notarisation pipeline for
-> final releases is documented in `docs/RELEASING-MACOS.md`. Never
-> disable Gatekeeper for MailFerry or anything else.
+> **macOS Gatekeeper:** this release candidate's macOS binaries are not
+> yet Apple-notarised, so Gatekeeper may block the first launch — a
+> one-time **Open Anyway** approval is expected for this RC. Follow the
+> step-by-step guide in
+> [docs/INSTALLATION-MACOS.md](docs/INSTALLATION-MACOS.md); never disable
+> Gatekeeper.
 
 Building from source instead: Go 1.22+, then `go build ./cmd/mailferry`
 from the repository root — or `./build.sh` for all six release targets
@@ -133,8 +132,8 @@ passwords into its State Database, logs or reports.
 
 ```
 --workers N            concurrent mailboxes (default 10)
---db PATH              State Database (default ./migration.db)
---logs-dir DIR         logs (default ./logs)
+--db PATH              State Database (default: native per-user mailferry.db)
+--logs-dir DIR         logs (default: native per-OS location)
 --skip-completed       skip mailboxes already recorded SUCCESS
 --include/--exclude G  folder filters (repeatable), --map FILE renames
 --sync-flags           re-apply changed flags to already-synced mail
@@ -148,17 +147,44 @@ commands (`status`, `failed`, `retry-failed`, `verify`, `doctor`,
 `capabilities`, `benchmark`, `compact`, `import-state`, `config`,
 `changelog`, `roadmap`, …).
 
-## Configuration (mailferry.toml)
+## Configuration, state and where files live
 
-MailFerry works with no configuration at all. On first run it generates a
-fully documented `mailferry.toml` (and tells you exactly where —
-`~/.config/mailferry/mailferry.toml` unless a `./mailferry.toml` exists
-or `--config PATH` is given). Every option ships at its built-in default;
-CLI flags always override the file; a missing or broken file can never
-stop MailFerry. Your file is never overwritten — when a future version
-introduces new options, they are appended as commented, documented
-defaults with your settings untouched. `mailferry config` shows the
-active path and search order.
+MailFerry works with no configuration at all, and it is tidy about your
+filesystem:
+
+- **Informational commands create nothing.** `--help`, `version`,
+  `about`, `changelog`, `roadmap` and `config paths` are strictly
+  read-only — no configuration, no directories, no database appear just
+  because you looked at the help.
+- **Everything is created lazily**, on the first *operational* run
+  (`mailferry run …`) or when you explicitly ask (`mailferry config`).
+  Only what an operation actually needs is created.
+- **One State Database per user** — `mailferry.db` in the native
+  application-state location (below), shared by all runs, so working
+  from `~/Downloads` today and `~/Documents` tomorrow resumes the same
+  state. Override with `--db PATH` or in `mailferry.toml`.
+- Your **migration CSVs stay wherever you keep them** — MailFerry never
+  relocates user files.
+
+Native default locations (`mailferry config paths` shows yours):
+
+| | macOS | Linux (XDG) | Windows |
+| --- | --- | --- | --- |
+| Configuration | `~/Library/Application Support/MailFerry/mailferry.toml` | `$XDG_CONFIG_HOME/mailferry/mailferry.toml` (`~/.config/…`) | `%APPDATA%\MailFerry\mailferry.toml` |
+| State Database | `~/Library/Application Support/MailFerry/mailferry.db` | `$XDG_STATE_HOME/mailferry/mailferry.db` (`~/.local/state/…`) | `%LOCALAPPDATA%\MailFerry\mailferry.db` |
+| Logs | `~/Library/Logs/MailFerry/` | `$XDG_STATE_HOME/mailferry/logs/` | `%LOCALAPPDATA%\MailFerry\Logs\` |
+| Cache | `~/Library/Caches/MailFerry/` | `$XDG_CACHE_HOME/mailferry/` | `%LOCALAPPDATA%\MailFerry\Cache\` |
+
+Precedence is deterministic: **CLI flags → `mailferry.toml` → native OS
+default**. A `./mailferry.toml` in the working directory is also
+honoured (handy for self-contained setups; a full `--portable` mode is
+planned, not yet implemented).
+
+The generated `mailferry.toml` is fully documented, ships every option
+at its built-in default, is never overwritten, and can never stop
+MailFerry by being missing or broken. When a future version introduces
+new options they are appended as commented defaults — your settings are
+untouched.
 
 ## The TUI
 
@@ -193,7 +219,7 @@ state.
   `tmux attach -t mailferry`.
 - **Headless:** `--no-tui` (or any non-interactive stdin/stdout, e.g.
   cron, CI, `nohup`, pipes — detected automatically) prints clean status
-  lines instead. `mailferry status --db ./migration.db` inspects a
+  lines instead. `mailferry status` inspects a
   running or finished migration read-only from another shell, and
   `--json-logs` / `--json-progress` emit NDJSON for machine consumption.
 

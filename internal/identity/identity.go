@@ -1,5 +1,5 @@
 // MailFerry — IMAP Migration & Sync
-// A High-Performance Native IMAP Migration Engine
+// High-Performance Native IMAP Migration Engine
 //
 // Copyright (C) 2026 Andy Saputra
 // Author: Andy Saputra <andy@saputra.org>
@@ -17,10 +17,10 @@ package identity
 import "fmt"
 
 const (
-	Version      = "2.0.0-rc.1"
+	Version      = "2.0.0-rc.2"
 	Product      = "MailFerry"
 	Title        = "MailFerry – IMAP Migration & Sync"
-	Slogan       = "A High-Performance Native IMAP Migration Engine"
+	Slogan       = "High-Performance Native IMAP Migration Engine"
 	Author       = "Andy Saputra"
 	AuthorEmail  = "andy@saputra.org"
 	Copyright    = "Copyright (C) 2026 Andy Saputra"

@@ -13,8 +13,9 @@ The canonical roadmap also ships in the binary: `mailferry roadmap`.
 - [ ] **v2.0.0** — Complete architectural rewrite in Go (this
   repository): single static cross-platform binary, goroutine-based
   concurrent engine, plus destination deduplication and date-range
-  migration modes. `v2.0.0-rc.1` is the public release candidate;
-  v2.0.0 final ships only after full parity validation in the field.
+  migration modes. Release candidates (`v2.0.0-rc.N`) are published
+  as GitHub pre-releases for field validation; v2.0.0 final ships only
+  after that validation completes.
 - [ ] **v2.1.0** — Performance: MULTIAPPEND batching and
   QRESYNC/CONDSTORE delta sync; OAuth 2.0 (XOAUTH2 / OAUTHBEARER);
   Prometheus-style metrics.

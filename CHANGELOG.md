@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Remaining before the final v2.0.0 release:
 
-- Real-world validation of v2.0.0-rc.1 (real IMAP providers, large
-  mailboxes, crash/restart field tests, SSH/tmux/Windows console matrix).
+- Real-world validation of the v2 release candidates (real IMAP
+  providers, large mailboxes, crash/restart field tests,
+  SSH/tmux/Windows console matrix).
 - New v2 capabilities still in development: destination **deduplication
   mode** (conservative, dry-run by default, full audit trail),
   **date-range migration** (`--from`/`--to`, INTERNALDATE-authoritative)
@@ -21,7 +22,66 @@ Remaining before the final v2.0.0 release:
   Developer ID and not notarised.
 - Published Python-vs-Go benchmark comparison; release automation.
 
-## [2.0.0-rc.1] - 2026-07-18
+## [2.0.0-rc.2] - 2026-07-18
+
+Release-candidate refinement pass: native operating-system paths, lazy
+state initialisation and canonical identity. Published as a GitHub
+**pre-release**; not the production release.
+
+### Changed
+
+- **Canonical slogan corrected** everywhere to
+  **"High-Performance Native IMAP Migration Engine"** (no leading "A").
+  Identity has a single authoritative source (`internal/identity`) and
+  is now enforced by an automated test.
+- **Native per-OS application paths** (new `internal/paths`, one place
+  for every location; resolving a path never creates it):
+  - macOS: `~/Library/Application Support/MailFerry/` (configuration +
+    State Database), `~/Library/Logs/MailFerry/`,
+    `~/Library/Caches/MailFerry/`
+  - Linux: XDG Base Directories (`$XDG_CONFIG_HOME/mailferry/`,
+    `$XDG_STATE_HOME/mailferry/` for the database and logs,
+    `$XDG_CACHE_HOME/mailferry/`), with standard fallbacks
+  - Windows: `%APPDATA%\MailFerry\` (configuration),
+    `%LOCALAPPDATA%\MailFerry\` (database, `Logs\`, `Cache\`)
+  - Precedence: CLI flags → `mailferry.toml` (new `database.path` /
+    `logging.directory` keys) → native default. A `./mailferry.toml`
+    in the working directory is still honoured; a full `--portable`
+    mode is planned but not yet implemented.
+- **`mailferry.db` is the canonical State Database** (replacing the
+  `./migration.db` working-directory default): one authoritative
+  per-user database regardless of the directory MailFerry is run from.
+  An existing development `./migration.db` is detected and reported
+  with explicit choices — it is never adopted, moved, overwritten or
+  silently duplicated. `--db PATH` continues to be honoured verbatim.
+- **Zero-side-effect informational commands**: `--help`, `-h`,
+  `version`, `--version`, `about`, `changelog`, `roadmap` and
+  `config paths` no longer create configuration, directories, logs,
+  caches or databases — resolution is separated from creation, and
+  regression tests enforce it. Configuration is generated on the
+  first *operational* run (`run`/`resume`) or explicitly via
+  `mailferry config`; read-only State Database commands (`status`,
+  `failed`, `retry-failed`, `verify`, `compact`) now refuse to create
+  an empty database as a side effect.
+- New **`mailferry config paths`** shows every canonical location
+  (with creation status) without creating anything.
+- **Restrictive permissions** on MailFerry-generated files: 0700
+  application directories; 0600 configuration, State Database
+  (including WAL/SHM) and logs, where the platform supports POSIX
+  permissions.
+- Documentation: README rewritten around the native-path/lazy-creation
+  model; **CONTRIBUTING.md rewritten for the Go project** (developer
+  workflow, dependency policy, engineering principles, bug-report
+  guidance); new end-user **docs/INSTALLATION-MACOS.md** (architecture
+  choice, Gatekeeper "Open Anyway" walk-through specific to this RC,
+  checksum verification vs notarisation).
+
+### Fixed
+
+- Read-only inspection commands could previously create an empty
+  State Database when pointed at a missing path.
+
+## [2.0.0-rc.1] - 2026-07-18 (superseded by rc.2 before public release)
 
 First public **Release Candidate** of MailFerry v2.0.0 — the complete
 native Go rewrite. Published as a GitHub **pre-release** for real-world
@@ -386,6 +446,7 @@ Engine.
   suite (34 checks).
 - Packaging: standalone `mailferry.pyz` (zipapp), source archive, wheel.
 
-[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.1...HEAD
-[2.0.0-rc.1]: https://github.com/ajsap/mailferry/compare/v1.0.0...v2.0.0-rc.1
+[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.2...HEAD
+[2.0.0-rc.2]: https://github.com/ajsap/mailferry/compare/v1.0.0...v2.0.0-rc.2
+[2.0.0-rc.1]: https://github.com/ajsap/mailferry/blob/main/CHANGELOG.md
 [1.0.0]: https://github.com/ajsap/mailferry/releases/tag/v1.0.0

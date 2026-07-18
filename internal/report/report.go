@@ -1,5 +1,5 @@
 // MailFerry — IMAP Migration & Sync
-// A High-Performance Native IMAP Migration Engine
+// High-Performance Native IMAP Migration Engine
 //
 // Copyright (C) 2026 Andy Saputra
 // Author: Andy Saputra <andy@saputra.org>
@@ -50,13 +50,13 @@ func (s *Session) Log(msg string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := util.NowISO()
-	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err == nil {
 		fmt.Fprintf(f, "%s %s\n", ts, msg)
 		f.Close()
 	}
 	if s.jsonPath != "" {
-		if jf, err := os.OpenFile(s.jsonPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		if jf, err := os.OpenFile(s.jsonPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 			enc, _ := json.Marshal(map[string]string{"ts": ts, "event": msg})
 			jf.Write(append(enc, '\n'))
 			jf.Close()
@@ -85,7 +85,7 @@ func StartProgressNDJSON(path string, stats *engine.Stats) (stop func()) {
 					"wire_rx": agg.WireRX, "wire_tx": agg.WireTX,
 					"failed_msgs": agg.FailedMsgs, "reconnects": agg.Reconnects,
 				}
-				if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+				if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 					enc, _ := json.Marshal(row)
 					f.Write(append(enc, '\n'))
 					f.Close()
@@ -105,7 +105,7 @@ func MailboxLoggerFactory(logsDir string) engine.LoggerFactory {
 		write := func(line string) {
 			mu.Lock()
 			defer mu.Unlock()
-			f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 			if err != nil {
 				return
 			}

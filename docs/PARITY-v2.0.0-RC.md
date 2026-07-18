@@ -120,7 +120,7 @@ Classification: `IMPLEMENTED` · `PARTIALLY` · `MISSING` ·
 | Feature | Python final | Go RC |
 | --- | --- | --- |
 | session.log, per-mailbox logs, results.csv (same columns), failed_messages.csv, JSON export, console summary | ✓ | IMPLEMENTED |
-| Branding: product, title, slogan ("A High-Performance Native IMAP Migration Engine"), author, AGPL-3.0; single version source | ✓ | IMPLEMENTED (`internal/identity`) |
+| Branding: product, title, slogan, author, AGPL-3.0; single version source | ✓ | IMPLEMENTED (`internal/identity`; since rc.2 the canonical slogan is "High-Performance Native IMAP Migration Engine") |
 | Help/About content, keyboard reference | ✓ | IMPLEMENTED (expanded to document the restored keys) |
 
 ## Out of scope for parity (new v2.0.0 features, tracked for M3)

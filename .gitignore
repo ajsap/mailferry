@@ -9,6 +9,7 @@ migration.db-shm
 dist/
 
 # Local development
+/mailferry
 .legacy-python/
 *.exe
 nohup.out

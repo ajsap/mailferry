@@ -1,5 +1,5 @@
 // MailFerry — IMAP Migration & Sync
-// A High-Performance Native IMAP Migration Engine
+// High-Performance Native IMAP Migration Engine
 //
 // Copyright (C) 2026 Andy Saputra
 // Author: Andy Saputra <andy@saputra.org>
@@ -98,7 +98,7 @@ type Run struct {
 // Defaults returns a Run with the Python engine's defaults.
 func Defaults() *Run {
 	return &Run{
-		Workers: 10, LogsDir: "./logs", DBPath: "./migration.db",
+		Workers: 10, LogsDir: "", DBPath: "", // "" = native per-OS default, resolved lazily
 		Retries: 2, RetryDelay: 30, Order: "csv",
 		MaxConnsPerBox: 3, PerHostConns: 8, Timeout: 120,
 		StaleTimeout: 300, RecoveryRetries: 3, RecoveryInterval: 30,

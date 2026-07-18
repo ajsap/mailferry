@@ -1,5 +1,5 @@
 // MailFerry — IMAP Migration & Sync
-// A High-Performance Native IMAP Migration Engine
+// High-Performance Native IMAP Migration Engine
 //
 // Copyright (C) 2026 Andy Saputra
 // Author: Andy Saputra <andy@saputra.org>
@@ -36,6 +36,7 @@ import (
 	"github.com/ajsap/mailferry/v2/internal/fakeimap"
 	"github.com/ajsap/mailferry/v2/internal/identity"
 	"github.com/ajsap/mailferry/v2/internal/imapx"
+	"github.com/ajsap/mailferry/v2/internal/paths"
 	"github.com/ajsap/mailferry/v2/internal/progress"
 	"github.com/ajsap/mailferry/v2/internal/report"
 	"github.com/ajsap/mailferry/v2/internal/state"
@@ -59,11 +60,37 @@ var commands = map[string]bool{"run": true, "resume": true, "check": true,
 // mailferry.toml: sensible defaults that just work; the file only exists so
 // advanced users can tune behaviour. CLI flags always win. A missing or
 // broken file can never stop MailFerry from starting.
+//
+// The bootstrap is STRICTLY READ-ONLY: informational commands (--help,
+// version, about, changelog, roadmap, config paths, …) must never create
+// configuration, directories or any application state. Configuration is
+// generated only on the first OPERATIONAL run (run/resume) or by the
+// explicit `mailferry config` command — see ensureConfig.
 var (
-	bootCfg     *config.Run
-	bootPath    string
-	bootCreated bool
+	bootCfg      *config.Run
+	bootPath     string
+	bootExplicit string
+	bootCreated  bool // set by ensureConfig, never by the bootstrap
 )
+
+// ensureConfig performs the explicit/operational configuration ensure:
+// creates the documented default mailferry.toml if absent (never
+// overwrites), appends newly-known options as commented defaults, and
+// restricts permissions. Reports and records creation.
+func ensureConfig(session func(string)) {
+	fresh := config.Defaults()
+	warns, path, created := config.LoadTOML(fresh, bootExplicit, true)
+	bootPath, bootCreated = path, created
+	for _, w := range warns {
+		fmt.Fprintln(os.Stderr, progress.C("note: "+w, "yellow"))
+	}
+	if created {
+		fmt.Fprintln(os.Stderr, progress.C("Created configuration:\n  "+path, "cyan"))
+		if session != nil {
+			session("configuration: wrote a documented default mailferry.toml to " + path)
+		}
+	}
+}
 
 func bootstrapConfig(argv []string) []string {
 	// extract --config PATH from anywhere in argv (Python-argparse parity)
@@ -81,15 +108,11 @@ func bootstrapConfig(argv []string) []string {
 		}
 	}
 	bootCfg = config.Defaults()
-	warns, path, created := config.LoadTOML(bootCfg, explicit, true)
-	bootPath, bootCreated = path, created
+	bootExplicit = explicit
+	warns, path, _ := config.LoadTOML(bootCfg, explicit, false) // read-only
+	bootPath = path
 	for _, w := range warns {
 		fmt.Fprintln(os.Stderr, progress.C("note: "+w, "yellow"))
-	}
-	if created {
-		fmt.Fprintln(os.Stderr, progress.C(fmt.Sprintf(
-			"note: wrote a documented default configuration to %s "+
-				"(optional — MailFerry runs fine without it)", path), "cyan"))
 	}
 	return argv
 }
@@ -189,10 +212,12 @@ Usage:
   mailferry import-state FILE    import the old wrapper's migration.state
   mailferry init FILE            write a CSV template
   mailferry config               show / create the mailferry.toml configuration
+  mailferry config paths         display all canonical paths (creates nothing)
   mailferry changelog | roadmap  release history / project roadmap
   mailferry version | about
 
-Frequent flags: --workers N --db PATH --logs-dir DIR --timeout S
+Frequent flags: --workers N --db PATH (native per-user mailferry.db
+  by default) --logs-dir DIR --timeout S
   --retries N --retry-delay S --per-host-conns N --skip-completed
   --order csv|size --include GLOB --exclude GLOB --map FILE --sync-flags
   --compress auto|off --baseline --tls-no-verify --no-tui --trace --config PATH
@@ -203,6 +228,52 @@ Repository: ` + identity.Repository + `
 Support:    ` + identity.SupportURL + `
 License:    ` + identity.LicenseShort + ` — run 'mailferry about' for details.
 `)
+}
+
+// resolveStateDB determines the effective State Database path without
+// creating anything: CLI/TOML override > native per-OS default. When the
+// native default is selected and a legacy development database
+// (./migration.db) exists while the native one does not, the caller gets
+// legacyHint to surface — MailFerry never silently picks between two
+// candidate authoritative databases.
+func resolveStateDB(override string) (db string, legacyHint string) {
+	if override != "" {
+		return override, ""
+	}
+	nat := paths.Default()
+	if _, err := os.Stat(nat.StateDB); err == nil {
+		return nat.StateDB, ""
+	}
+	if _, err := os.Stat(nat.LegacyStateDB); err == nil {
+		return nat.StateDB, fmt.Sprintf(
+			"old development State Database detected: %s\n"+
+				"canonical location: %s\n"+
+				"MailFerry will not choose between them automatically. Either\n"+
+				"  keep using it:   --db %s\n"+
+				"  or adopt the canonical location by moving it:\n"+
+				"  mv %s \"%s\"",
+			nat.LegacyStateDB, nat.StateDB, nat.LegacyStateDB,
+			nat.LegacyStateDB, nat.StateDB)
+	}
+	return nat.StateDB, ""
+}
+
+// requireExistingDB resolves --db for read-only State Database commands
+// (status/failed/retry-failed/verify/compact) and refuses to CREATE a
+// database as a side effect: absent DB is an error, never an empty file.
+func requireExistingDB(override string) (string, bool) {
+	db, hint := resolveStateDB(override)
+	if _, err := os.Stat(db); err != nil {
+		fmt.Fprintln(os.Stderr, "no State Database at", db)
+		if hint != "" {
+			fmt.Fprintln(os.Stderr, hint)
+		} else {
+			fmt.Fprintln(os.Stderr, "(nothing has been migrated on this machine yet, "+
+				"or pass --db PATH)")
+		}
+		return db, false
+	}
+	return db, true
 }
 
 // multiFlag collects repeatable --include / --exclude values.
@@ -227,8 +298,8 @@ func cmdRun(cmd string, rest []string) int {
 	var include, exclude multiFlag
 	var (
 		workers      = fs.Int("workers", 0, "Concurrent mailboxes (default 10)")
-		logsDir      = fs.String("logs-dir", "", "Directory for logs (default ./logs)")
-		dbPath       = fs.String("db", "", "State database path (default ./migration.db)")
+		logsDir      = fs.String("logs-dir", "", "Directory for logs (default: the native per-OS location)")
+		dbPath       = fs.String("db", "", "State database path (default: the native per-user mailferry.db)")
 		ephemeral    = fs.Bool("ephemeral", false, "Keep no persistent state")
 		force        = fs.Bool("force", false, "Re-verify everything (full replan + rescan; never blind re-copy)")
 		skipDone     = fs.Bool("skip-completed", false, "Skip mailboxes recorded SUCCESS")
@@ -400,10 +471,29 @@ func cmdRun(cmd string, rest []string) int {
 		return 1
 	}
 	if cfg.CheckOnly {
-		return runCheck(cfg, specs)
+		return runCheck(cfg, specs) // preflight: nothing written locally
 	}
 
-	if err := os.MkdirAll(cfg.LogsDir, 0o755); err != nil {
+	// First OPERATIONAL run: this is the point where configuration and
+	// application state may be created — never during informational use.
+	ensureConfig(nil)
+
+	if !cfg.Ephemeral {
+		db, legacyHint := resolveStateDB(cfg.DBPath)
+		if legacyHint != "" {
+			fmt.Fprintln(os.Stderr, legacyHint)
+			return 1
+		}
+		cfg.DBPath = db
+		if err := paths.EnsureParent(cfg.DBPath); err != nil {
+			fmt.Fprintln(os.Stderr, "ERROR:", err)
+			return 1
+		}
+	}
+	if cfg.LogsDir == "" {
+		cfg.LogsDir = paths.Default().LogsDir
+	}
+	if err := paths.EnsureDir(cfg.LogsDir); err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
 	}
@@ -416,6 +506,7 @@ func cmdRun(cmd string, rest []string) int {
 	if bootCreated {
 		session.Log("configuration: wrote a documented default mailferry.toml to " + bootPath)
 	}
+	defer paths.RestrictDB(cfg.DBPath)
 	var stopProgress func()
 	if cfg.JSONProgress {
 		stopProgress = func() {}
@@ -477,7 +568,7 @@ func cmdRun(cmd string, rest []string) int {
 	report.PrintFailedSection(res.FailedRegistry, res.Outstanding, cfg.LogsDir, progress.C)
 	if bootCreated {
 		fmt.Println(progress.C("note: a documented default configuration was written to "+
-			bootPath+" on this first run.", "cyan"))
+			bootPath+" on this first operational run.", "cyan"))
 	}
 	if interrupted {
 		fmt.Println(progress.C("Interrupted — per-UID state is committed; re-run the same "+
@@ -774,7 +865,7 @@ func cmdCapabilities(rest []string) int {
 
 func cmdVerify(rest []string) int {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
-	dbPath := fs.String("db", "./migration.db", "State database path")
+	dbPath := fs.String("db", "", "State database path (default: the native per-user mailferry.db)")
 	tlsNoVerify := fs.Bool("tls-no-verify", false, "Disable TLS certificate verification")
 	fs.Parse(reorderArgs(fs, rest))
 	if fs.NArg() < 1 {
@@ -786,7 +877,11 @@ func cmdVerify(rest []string) int {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
 	}
-	db, err := state.OpenForTest(*dbPath)
+	resolved, okDB := requireExistingDB(*dbPath)
+	if !okDB {
+		return 1
+	}
+	db, err := state.OpenForTest(resolved)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
@@ -853,9 +948,13 @@ func cmdVerify(rest []string) int {
 
 func cmdCompact(rest []string) int {
 	fs := flag.NewFlagSet("compact", flag.ExitOnError)
-	dbPath := fs.String("db", "./migration.db", "State database path")
+	dbPath := fs.String("db", "", "State database path (default: the native per-user mailferry.db)")
 	fs.Parse(reorderArgs(fs, rest))
-	db, err := state.OpenForTest(*dbPath)
+	resolved, okDB := requireExistingDB(*dbPath)
+	if !okDB {
+		return 1
+	}
+	db, err := state.OpenForTest(resolved)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
@@ -868,13 +967,23 @@ func cmdCompact(rest []string) int {
 
 func cmdImportState(rest []string) int {
 	fs := flag.NewFlagSet("import-state", flag.ExitOnError)
-	dbPath := fs.String("db", "./migration.db", "State database path")
+	dbPath := fs.String("db", "", "State database path (default: the native per-user mailferry.db)")
 	fs.Parse(reorderArgs(fs, rest))
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "usage: mailferry import-state STATEFILE [--db PATH]")
 		return 2
 	}
-	db, err := state.Open(*dbPath, false, 300)
+	resolved, legacyHint := resolveStateDB(*dbPath)
+	if legacyHint != "" {
+		fmt.Fprintln(os.Stderr, legacyHint)
+		return 1
+	}
+	if err := paths.EnsureParent(resolved); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	defer paths.RestrictDB(resolved)
+	db, err := state.Open(resolved, false, 300)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
@@ -885,7 +994,7 @@ func cmdImportState(rest []string) int {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
 	}
-	fmt.Printf("Imported %d completed mailbox record(s) from %s into %s.\n", n, fs.Arg(0), *dbPath)
+	fmt.Printf("Imported %d completed mailbox record(s) from %s into %s.\n", n, fs.Arg(0), resolved)
 	fmt.Println("Those mailboxes will get a cheap incremental pass (or be skipped with --skip-completed).")
 	return 0
 }
@@ -1010,6 +1119,28 @@ func cmdBenchmark(rest []string) int {
 // ---------------------------------------------------------------- config --
 
 func cmdConfig(rest []string) int {
+	// `config paths` — display every canonical location WITHOUT creating
+	// anything (displaying a path must not require it to exist).
+	if len(rest) > 0 && rest[0] == "paths" {
+		p := paths.Default()
+		fmt.Printf("%s\n%s\n\n", identity.BannerLine(), identity.Slogan)
+		mark := func(fp string) string {
+			if _, err := os.Stat(fp); err == nil {
+				return ""
+			}
+			return "   (not created yet)"
+		}
+		cfgPath, _ := config.FindTOML(bootExplicit)
+		dbPath, _ := resolveStateDB("")
+		fmt.Printf("Configuration : %s%s\n", cfgPath, mark(cfgPath))
+		fmt.Printf("State Database: %s%s\n", dbPath, mark(dbPath))
+		fmt.Printf("Logs          : %s%s\n", p.LogsDir, mark(p.LogsDir))
+		fmt.Printf("Cache         : %s%s\n", p.CacheDir, mark(p.CacheDir))
+		fmt.Println("\nPrecedence: CLI flags (--config/--db/--logs-dir) > mailferry.toml >")
+		fmt.Println("native OS default. Everything is created lazily, only when an")
+		fmt.Println("operation needs it — informational commands never create files.")
+		return 0
+	}
 	fs := flag.NewFlagSet("config", flag.ExitOnError)
 	pathOnly := fs.Bool("path", false, "Print only the active config path")
 	fs.Parse(rest)
@@ -1017,20 +1148,24 @@ func cmdConfig(rest []string) int {
 		fmt.Println(bootPath)
 		return 0
 	}
+	// Explicit configuration request: creating the default file here is
+	// intentional (the ONE informational-family command allowed to).
+	ensureConfig(nil)
 	fmt.Printf("%s\n%s\n\n", identity.BannerLine(), identity.Slogan)
 	note := ""
 	if bootCreated {
 		note = "   (created just now)"
 	} else if _, err := os.Stat(bootPath); err != nil {
-		note = "   (missing — using built-in defaults)"
+		note = "   (missing — could not be created; using built-in defaults)"
 	}
 	fmt.Printf("Configuration file : %s%s\n", bootPath, note)
 	fmt.Printf("Default location   : %s\n", config.DefaultTOMLPath())
-	fmt.Println("Search order       : --config PATH > ./mailferry.toml > default location")
+	fmt.Println("Search order       : --config PATH > ./mailferry.toml > native OS location")
 	fmt.Println("\nEvery option is documented inside the file itself. CLI flags")
 	fmt.Println("always override it; deleting it is always safe. New options in")
 	fmt.Println("future versions are appended as commented defaults — your own")
-	fmt.Println("settings are never rewritten.")
+	fmt.Println("settings are never rewritten. `mailferry config paths` shows all")
+	fmt.Println("canonical locations without creating them.")
 	return 0
 }
 
@@ -1083,14 +1218,14 @@ func pruneOldLogs(dir string, keepDays int) {
 
 func cmdStatus(rest []string) int {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	dbPath := fs.String("db", "./migration.db", "State database path")
+	dbPath := fs.String("db", "", "State database path (default: the native per-user mailferry.db)")
 	workerTO := fs.Float64("worker-timeout", 60, "Offline threshold (s)")
 	fs.Parse(reorderArgs(fs, rest))
-	if _, err := os.Stat(*dbPath); err != nil {
-		fmt.Fprintln(os.Stderr, "no State Database at", *dbPath)
+	resolved, ok := requireExistingDB(*dbPath)
+	if !ok {
 		return 1
 	}
-	db, err := state.OpenForTest(*dbPath) // read-only snapshot; never competes with workers
+	db, err := state.OpenForTest(resolved) // read-only snapshot; never competes with workers
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
@@ -1149,14 +1284,18 @@ func cmdStatus(rest []string) int {
 
 func cmdFailed(rest []string) int {
 	fs := flag.NewFlagSet("failed", flag.ExitOnError)
-	dbPath := fs.String("db", "./migration.db", "State database path")
+	dbPath := fs.String("db", "", "State database path (default: the native per-user mailferry.db)")
 	mailbox := fs.String("mailbox", "", "Only this mailbox (source user)")
 	asJSON := fs.Bool("json", false, "Emit JSON")
 	csvOut := fs.String("csv", "", "Export to a CSV file")
 	all := fs.Bool("all", false, "Include RECOVERED / IGNORED")
 	ignore := fs.Bool("ignore", false, "Mark the selection IGNORED (still skipped, no longer outstanding)")
 	fs.Parse(reorderArgs(fs, rest))
-	db, err := state.OpenForTest(*dbPath)
+	resolved, okDB := requireExistingDB(*dbPath)
+	if !okDB {
+		return 1
+	}
+	db, err := state.OpenForTest(resolved)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
@@ -1207,12 +1346,16 @@ func cmdFailed(rest []string) int {
 
 func cmdRetryFailed(rest []string) int {
 	fs := flag.NewFlagSet("retry-failed", flag.ExitOnError)
-	dbPath := fs.String("db", "./migration.db", "State database path")
+	dbPath := fs.String("db", "", "State database path (default: the native per-user mailferry.db)")
 	mailbox := fs.String("mailbox", "", "Only this mailbox (source user)")
 	folder := fs.String("folder", "", "Only this folder")
 	uid := fs.Int("uid", 0, "Only this source UID")
 	fs.Parse(reorderArgs(fs, rest))
-	db, err := state.OpenForTest(*dbPath)
+	resolved, okDB := requireExistingDB(*dbPath)
+	if !okDB {
+		return 1
+	}
+	db, err := state.OpenForTest(resolved)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1

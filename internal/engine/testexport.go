@@ -1,5 +1,5 @@
 // MailFerry — IMAP Migration & Sync
-// A High-Performance Native IMAP Migration Engine
+// High-Performance Native IMAP Migration Engine
 //
 // Copyright (C) 2026 Andy Saputra
 // Author: Andy Saputra <andy@saputra.org>

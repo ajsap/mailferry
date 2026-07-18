@@ -1,5 +1,5 @@
 // MailFerry — IMAP Migration & Sync
-// A High-Performance Native IMAP Migration Engine
+// High-Performance Native IMAP Migration Engine
 //
 // Copyright (C) 2026 Andy Saputra
 // Author: Andy Saputra <andy@saputra.org>
@@ -28,7 +28,7 @@ func RenderShot(view string) string {
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	stats := engine.NewStats()
 	stats.CSVFile = "mailboxes.csv"
-	stats.DBPath = "./migration.db"
+	stats.DBPath = "./mailferry.db"
 	stats.LogsDir = "./logs"
 	stats.Workers = 4
 	now := time.Now()
@@ -92,10 +92,10 @@ func RenderShot(view string) string {
 	})
 	hist := []struct{ ev, st, mb, det string }{
 		{"Run started", "OK", "-", "mailboxes.csv · 8 mailbox(es) · run 20260718-093012"},
-		{"Worker joined", "OK", "-", "ferry:70210:a1b2c3d4 — cluster on ./migration.db"},
+		{"Worker joined", "OK", "-", "ferry:70210:a1b2c3d4 — cluster on ./mailferry.db"},
 		{"Migration started", "OK", "user1@example.org", "user1 → user1@example.net"},
 		{"Folder migrated", "OK", "user1@example.org", "INBOX: 2,210 msgs, 380.0 MB"},
-		{"Worker joined", "OK", "-", "helm:70211:e5f6a7b8 — cluster on ./migration.db"},
+		{"Worker joined", "OK", "-", "helm:70211:e5f6a7b8 — cluster on ./mailferry.db"},
 		{"Stalled transfer detected", "WARN", "user4@example.org", "no progress for 5m 0s — verifying"},
 		{"Connection recovery", "WARN", "user4@example.org", "attempt 1/3 — reconnecting from the last checkpoint"},
 		{"Transfer recovered", "OK", "user4@example.org", "resumed after reconnect 1 — no data lost"},

@@ -1,5 +1,5 @@
 // MailFerry — IMAP Migration & Sync
-// A High-Performance Native IMAP Migration Engine
+// High-Performance Native IMAP Migration Engine
 //
 // Copyright (C) 2026 Andy Saputra
 // Author: Andy Saputra <andy@saputra.org>
@@ -18,12 +18,12 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ajsap/mailferry/v2/internal/identity"
+	"github.com/ajsap/mailferry/v2/internal/paths"
 )
 
 const TOMLTemplate = `# MailFerry Configuration
@@ -78,6 +78,8 @@ recovery_retries = 3
 recovery_interval_seconds = 30
 
 [logging]
+# Directory for logs. Empty = the native per-OS default.
+# directory = ""
 # "info" (default), "debug" (full tracebacks) or "trace" (wire protocol,
 # credentials always redacted).
 level = "info"
@@ -91,6 +93,9 @@ refresh_ms = 250
 show_transfer_speed = true
 
 [database]
+# Absolute path of the State Database. Empty = the native per-OS default
+# (mailferry.db under the platform application-state directory).
+# path = ""
 # Worker/lease heartbeat interval in seconds.
 heartbeat_seconds = 15
 # A cluster worker silent for this long is offline; its mailboxes are
@@ -100,27 +105,36 @@ worker_timeout_seconds = 60
 lock_timeout_seconds = 300
 `
 
-// DefaultTOMLPath honours MAILFERRY_CONFIG_DIR (used by tests).
+// DefaultTOMLPath is the native per-OS configuration location
+// (MAILFERRY_CONFIG_DIR overrides it for tests/controlled deployments).
 func DefaultTOMLPath() string {
-	if d := os.Getenv("MAILFERRY_CONFIG_DIR"); d != "" {
-		return filepath.Join(d, "mailferry.toml")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "mailferry.toml"
-	}
-	return filepath.Join(home, ".config", "mailferry", "mailferry.toml")
+	return paths.Default().ConfigFile
 }
 
-// FindTOML: --config PATH > ./mailferry.toml > default location.
-func FindTOML(explicit string) string {
+// FindTOML resolves which configuration file applies, WITHOUT touching
+// the filesystem beyond read-only stats:
+//
+//	--config PATH > ./mailferry.toml > native location > legacy dev location
+//
+// legacy reports whether the chosen file is a pre-rc.2 development
+// location (e.g. ~/.config/mailferry on macOS) — read, never written.
+func FindTOML(explicit string) (path string, legacy bool) {
 	if explicit != "" {
-		return explicit
+		return explicit, false
 	}
 	if _, err := os.Stat("mailferry.toml"); err == nil {
-		return "mailferry.toml"
+		return "mailferry.toml", false
 	}
-	return DefaultTOMLPath()
+	p := paths.Default()
+	if _, err := os.Stat(p.ConfigFile); err == nil {
+		return p.ConfigFile, false
+	}
+	if p.LegacyConfigFile != "" {
+		if _, err := os.Stat(p.LegacyConfigFile); err == nil {
+			return p.LegacyConfigFile, true
+		}
+	}
+	return p.ConfigFile, false
 }
 
 // parseTOML handles the subset MailFerry generates: [sections],
@@ -261,15 +275,22 @@ func upgradeAppend(path, raw string, tree map[string]map[string]any) int {
 // created).
 func LoadTOML(r *Run, explicit string, generate bool) ([]string, string, bool) {
 	var warns []string
-	path := FindTOML(explicit)
+	path, legacy := FindTOML(explicit)
+	if legacy {
+		warns = append(warns, fmt.Sprintf(
+			"configuration loaded from the legacy development location %s — "+
+				"the canonical location is %s (move the file there to adopt "+
+				"the new default; nothing is moved automatically)",
+			path, paths.Default().ConfigFile))
+	}
 	if _, err := os.Stat(path); err != nil {
 		if explicit != "" {
 			return []string{fmt.Sprintf("config file %s not found — using built-in defaults", path)}, path, false
 		}
 		if generate {
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
-				if err := os.WriteFile(path, []byte(TOMLTemplate), 0o644); err == nil {
-					return nil, path, true
+			if err := paths.EnsureParent(path); err == nil {
+				if err := os.WriteFile(path, []byte(TOMLTemplate), 0o600); err == nil {
+					return warns, path, true
 				}
 			}
 			warns = append(warns, fmt.Sprintf("could not create %s — using built-in defaults", path))
@@ -284,10 +305,12 @@ func LoadTOML(r *Run, explicit string, generate bool) ([]string, string, bool) {
 	if err != nil {
 		return []string{fmt.Sprintf("config %s: could not parse (%v) — using built-in defaults", path, err)}, path, false
 	}
-	if n := upgradeAppend(path, string(data), tree); n > 0 {
-		warns = append(warns, fmt.Sprintf(
-			"config: documented %d new option(s) at the end of %s (commented "+
-				"defaults — your settings are untouched)", n, path))
+	if generate { // ensure mode only: read-only loads never write anything
+		if n := upgradeAppend(path, string(data), tree); n > 0 {
+			warns = append(warns, fmt.Sprintf(
+				"config: documented %d new option(s) at the end of %s (commented "+
+					"defaults — your settings are untouched)", n, path))
+		}
 	}
 
 	num := func(v any) (float64, bool) {
@@ -358,6 +381,16 @@ func LoadTOML(r *Run, explicit string, generate bool) ([]string, string, bool) {
 				ok = setInt(&r.RecoveryRetries, val, 1)
 			case "recovery.recovery_interval_seconds":
 				ok = setF(&r.RecoveryInterval, val, 1)
+			case "database.path":
+				sv, isS := val.(string)
+				if ok = isS; ok && sv != "" {
+					r.DBPath = sv
+				}
+			case "logging.directory":
+				sv2, isS2 := val.(string)
+				if ok = isS2; ok && sv2 != "" {
+					r.LogsDir = sv2
+				}
 			case "logging.level":
 				s, isS := val.(string)
 				if ok = isS && (s == "info" || s == "debug" || s == "trace"); ok {
