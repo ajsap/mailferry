@@ -171,8 +171,12 @@ func (r *MailboxRunner) Run() string {
 			}
 		}
 		if !ok {
-			msg := fmt.Sprintf("held by another live worker (%s, heartbeat %ds ago)",
-				state.ShortWorker(other), int(age))
+			ownerRun := r.DB.WorkerRun(other)
+			if ownerRun == "" {
+				ownerRun = "unknown"
+			}
+			msg := fmt.Sprintf("owned by worker %s (heartbeat %ds ago, run %s)",
+				state.ShortWorker(other), int(age), ownerRun)
 			r.MB.Set(func(m *MBValues) {
 				m.Status = "REMOTE"
 				m.Op = "worker " + state.ShortWorker(other)
@@ -181,6 +185,7 @@ func (r *MailboxRunner) Run() string {
 			})
 			r.Session(fmt.Sprintf("[%03d] %s -> %s: REMOTE — %s",
 				spec.Index, spec.Src.User, spec.Dst.User, msg))
+			r.history("Mailbox already active", "WARN", msg+" — standing by as failover")
 			return "REMOTE"
 		}
 	}

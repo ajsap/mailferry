@@ -36,7 +36,9 @@ func (d *DB) Compact() int64 {
 }
 
 // ImportWrapperState imports the old wrapper's migration.state (JSONL,
-// mailbox-granular): every {"type":"result","status":"SUCCESS"} record
+// mailbox-granular; the wrapper's historical field names oldhost/olduser
+// etc. are part of THAT format and are intentionally preserved here):
+// every {"type":"result","status":"SUCCESS"} record
 // becomes a SUCCESS mailbox row, so those mailboxes get a cheap incremental
 // pass (or are skipped with --skip-completed).
 func (d *DB) ImportWrapperState(path string) (int, error) {
@@ -143,6 +145,15 @@ func (d *DB) UpdateFlags(fid int64, srcUID uint32, flags string) {
 	defer d.mu.Unlock()
 	d.con.Exec("UPDATE messages SET flags=? WHERE folder_id=? AND src_uid=?",
 		flags, fid, srcUID)
+}
+
+// WorkerRun returns the run id a worker registered with ("" if unknown).
+func (d *DB) WorkerRun(owner string) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var run string
+	d.con.QueryRow("SELECT COALESCE(run_id,'') FROM workers WHERE id=?", owner).Scan(&run)
+	return run
 }
 
 // SizeOfKey returns bytes_total recorded for a mailbox key (0 if unknown) —

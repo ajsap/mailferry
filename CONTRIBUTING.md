@@ -1,6 +1,6 @@
 # Contributing to MailFerry
 
-Thank you for considering a contribution to **MailFerry v2.0.0-rc.2 — IMAP
+Thank you for considering a contribution to **MailFerry v2.0.0-rc.3 — IMAP
 Migration & Sync**. Issues, feature requests and pull requests are all
 welcome at <https://github.com/ajsap/mailferry/issues>.
 
@@ -154,7 +154,7 @@ It's worth being precise about what "a release" actually means, because
 these are distinct things:
 
 1. **Source on `main`.** Code merged to `main` that has passed CI.
-2. **A Git tag.** A tag such as `v2.0.0-rc.2` pointing at a specific
+2. **A Git tag.** A tag such as `v2.0.0-rc.3` pointing at a specific
    commit.
 3. **A GitHub Release.** A release object on GitHub associated with a tag,
    with release notes and (usually) attached binary artefacts.

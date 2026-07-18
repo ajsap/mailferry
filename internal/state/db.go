@@ -116,7 +116,7 @@ type DB struct {
 }
 
 func Open(path string, ephemeral bool, leaseFresh float64) (*DB, error) {
-	dsn := path
+	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)"
 	if ephemeral {
 		dsn = ":memory:"
 	}

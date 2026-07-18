@@ -132,7 +132,7 @@ func WriteResultsCSV(snap engine.Snapshot, logsDir string) string {
 	defer f.Close()
 	w := csv.NewWriter(f)
 	defer w.Flush()
-	w.Write([]string{"index", "olduser", "newuser", "status", "exit_code",
+	w.Write([]string{"index", "srcuser", "dstuser", "status", "exit_code",
 		"elapsed_seconds", "log_file", "notes", "error_type", "attempts",
 		"msgs_new", "msgs_adopted", "msgs_skipped", "msgs_failed", "bytes_done",
 		"folders", "reconnects", "retries"})
@@ -174,6 +174,36 @@ func WriteResultsCSV(snap engine.Snapshot, logsDir string) string {
 }
 
 // PrintSummary: the end-of-run report.
+// summaryHints appends plain-language explanations so a run that copied
+// nothing (already synced) or deferred to other workers is never mistaken
+// for a silent failure.
+func summaryHints(snap engine.Snapshot, c func(string, string) string) []string {
+	var out []string
+	attempted := 0
+	for _, m := range snap.Mailboxes {
+		switch m.Status {
+		case "SUCCESS", "WARNINGS", "PARTIAL", "FAILED", "STALE", "CANCELLED":
+			attempted++
+		}
+	}
+	var copied int64
+	for _, m := range snap.Mailboxes {
+		copied += m.Appended
+	}
+	if attempted > 0 && copied == 0 && len(snap.Mailboxes) > 0 && !snap.Interrupted {
+		out = append(out, c("Nothing new to copy — every message was already on the "+
+			"Destination Server (verified, not skipped blindly). Re-running is "+
+			"always safe.", "green"))
+	}
+	for _, m := range snap.Mailboxes {
+		if m.Status == "REMOTE" {
+			out = append(out, c(fmt.Sprintf("Mailbox already active: %s — %s", m.Label,
+				orNA(m.Detail)), "yellow"))
+		}
+	}
+	return out
+}
+
 func PrintSummary(snap engine.Snapshot, resultsPath string, cfg *config.Run,
 	runtime float64, interrupted bool, colf func(string, string) string) {
 	agg := snap.Agg()
@@ -227,6 +257,9 @@ func PrintSummary(snap engine.Snapshot, resultsPath string, cfg *config.Run,
 	kv("Session log", filepath.Join(cfg.LogsDir, "session.log"))
 	kv("Results CSV", resultsPath)
 	kv("State Database", cfg.DBPath)
+	for _, h := range summaryHints(snap, c) {
+		fmt.Println(h)
+	}
 
 	var failed, partial []engine.MBValues
 	for _, m := range snap.Mailboxes {

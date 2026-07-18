@@ -14,7 +14,9 @@
 package config
 
 import (
+	"crypto/rand"
 	"encoding/csv"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -95,6 +97,14 @@ type Run struct {
 	RunID             string
 }
 
+// NewRunID: unique per invocation — timestamp plus random suffix, so
+// concurrent processes launched in the same second never collide.
+func NewRunID() string {
+	b := make([]byte, 2)
+	rand.Read(b)
+	return time.Now().Format("20060102-150405") + "-" + hex.EncodeToString(b)
+}
+
 // Defaults returns a Run with the Python engine's defaults.
 func Defaults() *Run {
 	return &Run{
@@ -108,7 +118,7 @@ func Defaults() *Run {
 		LogKeepDays: 30, DBHeartbeat: 15,
 		MsgRetries: 3, BatchBytes: 8 << 20, FetchWindow: 8, AppendWindow: 8,
 		TLSVerify: true, RefreshMS: 250, Compress: "auto",
-		RunID: time.Now().Format("20060102-150405"),
+		RunID: NewRunID(),
 	}
 }
 
@@ -132,11 +142,19 @@ func ParseCSV(path string) ([]MailboxSpec, error) {
 	for i, h := range rows[0] {
 		head[strings.ToLower(strings.TrimSpace(h))] = i
 	}
-	need := []string{"oldhost", "oldport", "oldsecurity", "olduser", "oldpassword",
-		"newhost", "newport", "newsecurity", "newuser", "newpassword"}
+	if _, obsolete := head["oldhost"]; obsolete {
+		return nil, fmt.Errorf("obsolete v1 CSV header detected (old*/new* columns). " +
+			"The canonical v2 header is:\n" +
+			"  srchost,srcport,srcsecurity,srcuser,srcpassword," +
+			"dsthost,dstport,dstsecurity,dstuser,dstpassword\n" +
+			"Rename the columns: old* -> src*, new* -> dst* (values are unchanged)")
+	}
+	need := []string{"srchost", "srcport", "srcsecurity", "srcuser", "srcpassword",
+		"dsthost", "dstport", "dstsecurity", "dstuser", "dstpassword"}
 	for _, n := range need {
 		if _, ok := head[n]; !ok {
-			return nil, fmt.Errorf("CSV missing required column %q", n)
+			return nil, fmt.Errorf("CSV missing required column %q (canonical v2 header: %s)",
+				n, strings.Join(need, ","))
 		}
 	}
 	get := func(row []string, key string) string {
@@ -173,20 +191,20 @@ func ParseCSV(path string) ([]MailboxSpec, error) {
 		if len(row) == 0 || (len(row) == 1 && strings.TrimSpace(row[0]) == "") {
 			continue
 		}
-		ssec, err := sec(get(row, "oldsecurity"))
+		ssec, err := sec(get(row, "srcsecurity"))
 		if err != nil {
 			return nil, fmt.Errorf("row %d: %w", n+2, err)
 		}
-		dsec, err := sec(get(row, "newsecurity"))
+		dsec, err := sec(get(row, "dstsecurity"))
 		if err != nil {
 			return nil, fmt.Errorf("row %d: %w", n+2, err)
 		}
 		spec := MailboxSpec{
 			Index: len(out) + 1,
-			Src: Endpoint{Host: get(row, "oldhost"), Port: port(row, "oldport", ssec),
-				Security: ssec, User: get(row, "olduser"), Password: get(row, "oldpassword")},
-			Dst: Endpoint{Host: get(row, "newhost"), Port: port(row, "newport", dsec),
-				Security: dsec, User: get(row, "newuser"), Password: get(row, "newpassword")},
+			Src: Endpoint{Host: get(row, "srchost"), Port: port(row, "srcport", ssec),
+				Security: ssec, User: get(row, "srcuser"), Password: get(row, "srcpassword")},
+			Dst: Endpoint{Host: get(row, "dsthost"), Port: port(row, "dstport", dsec),
+				Security: dsec, User: get(row, "dstuser"), Password: get(row, "dstpassword")},
 		}
 		if spec.Src.Host == "" || spec.Src.User == "" || spec.Dst.Host == "" || spec.Dst.User == "" {
 			return nil, fmt.Errorf("row %d: host/user columns must not be empty", n+2)
@@ -221,6 +239,6 @@ func (r *Run) FolderMap() map[string]string {
 }
 
 // CSVTemplate is written by `mailferry init`.
-const CSVTemplate = `oldhost,oldport,oldsecurity,olduser,oldpassword,newhost,newport,newsecurity,newuser,newpassword
-imap.example.com,993,ssl,jane@example.com,SourcePassword,imap.example.org,993,ssl,jane@example.org,DestinationPassword
+const CSVTemplate = `srchost,srcport,srcsecurity,srcuser,srcpassword,dsthost,dstport,dstsecurity,dstuser,dstpassword
+imap.example.com,993,ssl,jeslyn@example.com,SourcePassword,imap.example.org,993,ssl,jeslyn@example.org,DestinationPassword
 `

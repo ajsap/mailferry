@@ -12,7 +12,7 @@ binary speaks IMAP directly to both servers, streams messages
 source-to-destination with bounded memory, and records per-message state
 in an SQLite database so every run is resumable and duplicate-free.
 
-> **Release status: `v2.0.0-rc.2` (Release Candidate — pre-release).**
+> **Release status: `v2.0.0-rc.3` (Release Candidate — pre-release).**
 > v1.0.0 was the original Python implementation; development continued
 > unreleased after it and served as the behavioural reference for the
 > complete native Go rewrite that is v2. Release candidates exist for
@@ -43,7 +43,7 @@ permanent `legacy/python-final` branch as the behavioural reference; the
 Go engine reached feature parity with it before this RC (see
 `docs/PARITY-v2.0.0-RC.md`).
 
-## Feature status in v2.0.0-rc.2
+## Feature status in v2.0.0-rc.3
 
 **Implemented** (covered by the automated suite):
 
@@ -87,8 +87,8 @@ checksum, make it executable, run it. There is nothing else to install.
 
 ```sh
 shasum -a 256 -c SHA256SUMS          # verify (macOS: shasum, Linux: sha256sum)
-chmod +x mailferry-v2.0.0-rc.2-darwin-arm64
-./mailferry-v2.0.0-rc.2-darwin-arm64 version
+chmod +x mailferry-v2.0.0-rc.3-darwin-arm64
+./mailferry-v2.0.0-rc.3-darwin-arm64 version
 ```
 
 Targets: `darwin-arm64` (all Apple Silicon), `darwin-amd64` (Intel Macs),
@@ -120,11 +120,13 @@ State Database, verifies, and copies only what is missing.
 ### CSV format (fictional example — use your own servers)
 
 ```csv
-oldhost,oldport,oldsecurity,olduser,oldpassword,newhost,newport,newsecurity,newuser,newpassword
-imap.example.com,993,ssl,jane@example.com,SourcePassword,imap.example.org,993,ssl,jane@example.org,DestinationPassword
+srchost,srcport,srcsecurity,srcuser,srcpassword,dsthost,dstport,dstsecurity,dstuser,dstpassword
+imap.example.com,993,ssl,jeslyn@example.com,SourcePassword,imap.example.org,993,ssl,jeslyn@example.org,DestinationPassword
 ```
 
-`*security` is `ssl`, `tls` (STARTTLS) or `none`. The CSV holds plaintext
+`srcsecurity`/`dstsecurity` accept `ssl`, `tls` (STARTTLS) or `none`.
+Source Server columns are `src*`; Destination Server columns are `dst*`
+(the v1 `old*`/`new*` header is rejected with a clear rename hint). The CSV holds plaintext
 credentials — protect the file accordingly; MailFerry itself never writes
 passwords into its State Database, logs or reports.
 

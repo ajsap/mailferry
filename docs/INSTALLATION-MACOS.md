@@ -1,18 +1,18 @@
 # Installing MailFerry on macOS
 
 This is the end-user guide for downloading and running MailFerry
-v2.0.0-rc.2 on macOS. It does not cover how release binaries are signed
+v2.0.0-rc.3 on macOS. It does not cover how release binaries are signed
 or notarised — that maintainer-only pipeline is documented separately and
 linked at the bottom of this page.
 
 ## 1. Which binary do I need?
 
-MailFerry ships two macOS binaries for v2.0.0-rc.2:
+MailFerry ships two macOS binaries for v2.0.0-rc.3:
 
 | Your Mac | Binary |
 | --- | --- |
-| Apple Silicon (any M-series Mac — M1, M2, M3, M4 and later) | `mailferry-v2.0.0-rc.2-darwin-arm64` |
-| Intel Mac | `mailferry-v2.0.0-rc.2-darwin-amd64` |
+| Apple Silicon (any M-series Mac — M1, M2, M3, M4 and later) | `mailferry-v2.0.0-rc.3-darwin-arm64` |
+| Intel Mac | `mailferry-v2.0.0-rc.3-darwin-amd64` |
 
 If you're not sure which you have, click the Apple menu → **About This
 Mac**. The "Chip" or "Processor" line tells you: anything starting with
@@ -29,8 +29,8 @@ Download the correct binary from the
 Terminal in the download directory:
 
 ```sh
-chmod +x mailferry-v2.0.0-rc.2-darwin-arm64
-./mailferry-v2.0.0-rc.2-darwin-arm64 --help
+chmod +x mailferry-v2.0.0-rc.3-darwin-arm64
+./mailferry-v2.0.0-rc.3-darwin-arm64 --help
 ```
 
 (Substitute `-darwin-amd64` throughout this guide if you're on an Intel
@@ -44,7 +44,7 @@ operation (or explicit `mailferry config`) — see [section 5](#5-where-mailferr
 
 ## 3. macOS Gatekeeper
 
-**For this release candidate specifically:** the v2.0.0-rc.2 macOS
+**For this release candidate specifically:** the v2.0.0-rc.3 macOS
 binaries are not yet Apple-notarised, so Gatekeeper may block the first
 launch. This is expected for this release candidate and is not a
 limitation of Go or of MailFerry. (This note describes rc.2; it is easy
@@ -94,7 +94,7 @@ Or check a single file directly and compare the printed hash by eye
 against the matching line in `SHA256SUMS`:
 
 ```sh
-shasum -a 256 mailferry-v2.0.0-rc.2-darwin-arm64
+shasum -a 256 mailferry-v2.0.0-rc.3-darwin-arm64
 ```
 
 **A matching checksum proves one thing only: the file you downloaded is

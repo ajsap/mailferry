@@ -22,6 +22,55 @@ Remaining before the final v2.0.0 release:
   Developer ID and not notarised.
 - Published Python-vs-Go benchmark comparison; release automation.
 
+## [2.0.0-rc.3] - 2026-07-19
+
+Final planned Release Candidate before stable v2.0.0. Multi-process
+coordination hardening, honest coordination reporting, terminal-safety
+fixes and the canonical src/dst CSV format. Published as a GitHub
+**pre-release**.
+
+### Fixed
+
+- **Multi-instance visibility**: a MailFerry process that finds its
+  mailboxes actively owned by other healthy workers now says so plainly
+  on stdout — `Mailbox already active: <mailbox> — owned by worker
+  <id> (heartbeat …, run <run-id>)` — and stands by as a hot failover,
+  taking the mailbox over automatically when it is released or its
+  owner dies. Headless runs stream all notable coordination events
+  (takeovers, stale-lock auto-resets, completed-by-another-worker).
+  Nothing exits silently: runs that copy nothing explain why
+  ("Nothing new to copy — every message was already on the Destination
+  Server"), and the startup banner prints the unique
+  `Run <run-id> · worker <worker-id>` identity.
+- **Terminal restoration**: a second Ctrl+C in the TUI no longer
+  hard-exits underneath Bubble Tea — the engine is aborted, the TUI
+  quits and restores the terminal, then the process ends (bounded 2 s
+  wait). An engine panic is recovered and reported instead of killing
+  the process mid-alt-screen. No exit path leaves the terminal in raw
+  or alternate-screen state.
+- **SQLite multi-process hardening**: WAL / busy-timeout / synchronous
+  pragmas now travel in the connection string so every future
+  connection gets them, and Run IDs carry a random suffix so processes
+  launched in the same second can never collide.
+
+### Changed
+
+- **Canonical CSV format is `src`/`dst`**:
+  `srchost,srcport,srcsecurity,srcuser,srcpassword,dsthost,dstport,dstsecurity,dstuser,dstpassword`.
+  `mailferry init`, the docs and all fixtures use it; the obsolete v1
+  `old*`/`new*` header is rejected with an actionable rename hint —
+  columns are never silently misinterpreted.
+
+### Added
+
+- **Real multi-process concurrency tests**: the suite builds the actual
+  binary and launches genuine OS processes against one shared
+  `mailferry.db`, verifying concurrent independent runs, mixed-CSV
+  behaviour (available mailboxes proceed; held ones are reported and
+  topped up after release), exactly-once delivery under contention,
+  kill‑9 stale-worker reclaim across processes, unique run/worker
+  identities, and cross-process resume-to-zero idempotency.
+
 ## [2.0.0-rc.2] - 2026-07-18
 
 Release-candidate refinement pass: native operating-system paths, lazy
@@ -446,7 +495,8 @@ Engine.
   suite (34 checks).
 - Packaging: standalone `mailferry.pyz` (zipapp), source archive, wheel.
 
-[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.2...HEAD
+[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.3...HEAD
+[2.0.0-rc.3]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.2...v2.0.0-rc.3
 [2.0.0-rc.2]: https://github.com/ajsap/mailferry/compare/v1.0.0...v2.0.0-rc.2
 [2.0.0-rc.1]: https://github.com/ajsap/mailferry/blob/main/CHANGELOG.md
 [1.0.0]: https://github.com/ajsap/mailferry/releases/tag/v1.0.0

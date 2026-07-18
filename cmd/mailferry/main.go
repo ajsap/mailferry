@@ -532,6 +532,8 @@ func cmdRun(cmd string, rest []string) int {
 	fmt.Println()
 	fmt.Printf("Starting migration: %d mailbox(es), %d worker(s), State Database %s\n",
 		len(specs), cfg.Workers, stats.DBPath)
+	fmt.Printf("Run %s · worker %s — multiple MailFerry processes may share this "+
+		"State Database safely\n", cfg.RunID, state.ShortWorker(state.LeaseOwnerID()))
 	session.Log(fmt.Sprintf("=== %s — run %s start: csv=%s rows=%d workers=%d db=%s%s%s",
 		identity.BannerLine(), cfg.RunID, stats.CSVFile, len(specs), cfg.Workers, stats.DBPath,
 		map[bool]string{true: " force"}[cfg.Force], map[bool]string{true: " ephemeral"}[cfg.Ephemeral]))
@@ -565,6 +567,11 @@ func cmdRun(cmd string, rest []string) int {
 		res.Counts["FAILED"], res.Counts["STALE"], res.Counts["CANCELLED"],
 		map[bool]string{true: " (interrupted)"}[interrupted]))
 	report.PrintSummary(snap, resultsPath, cfg, runtimeS, interrupted, progress.C)
+	if n := res.Counts["REMOTE"]; n > 0 {
+		fmt.Println(progress.C(fmt.Sprintf("Handled by other workers : %d mailbox(es) were "+
+			"actively owned by other MailFerry processes (details above and in the "+
+			"session log) — they were mirrored, not duplicated.", n), "cyan"))
+	}
 	report.PrintFailedSection(res.FailedRegistry, res.Outstanding, cfg.LogsDir, progress.C)
 	if bootCreated {
 		fmt.Println(progress.C("note: a documented default configuration was written to "+
@@ -621,10 +628,17 @@ func runInteractive(ctx context.Context, cancel context.CancelFunc,
 	var runErr error
 	done := make(chan struct{})
 	go func() {
+		defer func() { // a crashed engine must never leave the terminal raw
+			if r := recover(); r != nil {
+				runErr = fmt.Errorf("engine panic: %v", r)
+				session.Log(fmt.Sprintf("FATAL engine panic: %v", r))
+			}
+			close(done)
+		}()
 		res, runErr = engine.RunMigrationBus(ctx, cfg, specs, stats, bus, session.Log,
 			report.MailboxLoggerFactory(cfg.LogsDir))
-		close(done)
 	}()
+	hardRequested := false
 	gracefulStop := func() {
 		session.Log("interrupt received (Ctrl+C) — graceful stop: no new work, active " +
 			"workers finish the current message, then connections close")
@@ -632,10 +646,13 @@ func runInteractive(ctx context.Context, cancel context.CancelFunc,
 		escalate(bus, session, done)
 	}
 	hardStop := func() {
+		// NEVER os.Exit while Bubble Tea owns the terminal: abort the
+		// engine, let the TUI quit and restore the terminal, then the
+		// bounded wait below finishes the process.
+		hardRequested = true
 		session.Log("second interrupt — immediate abort (state stays consistent)")
 		bus.AbortAllConnections()
 		cancel()
-		go func() { time.Sleep(400 * time.Millisecond); os.Exit(130) }()
 	}
 	model := tui.New(stats, bus, gracefulStop, hardStop,
 		time.Duration(cfg.RefreshMS)*time.Millisecond, done)
@@ -643,7 +660,16 @@ func runInteractive(ctx context.Context, cancel context.CancelFunc,
 	if _, err := p.Run(); err != nil {
 		// TUI failed: never abort the migration — fall back to waiting headless
 		fmt.Fprintln(os.Stderr, "note: TUI unavailable (", err, ") — continuing headless")
-		<-done
+	}
+	// terminal is restored here; bound the engine wait after a hard stop
+	if hardRequested {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			fmt.Fprintln(os.Stderr, "hard stop: engine still unwinding — exiting; "+
+				"state is committed per message and the next run resumes cleanly")
+			os.Exit(130)
+		}
 	} else {
 		<-done
 	}
@@ -677,9 +703,35 @@ func runHeadless(ctx context.Context, cancel context.CancelFunc, cfg *config.Run
 	renderer := progress.NewRenderer(stats, session.Log,
 		time.Duration(cfg.RefreshMS)*time.Millisecond)
 	renderer.Start()
+	// Surface notable coordination events on stdout — a headless process
+	// must never appear to do nothing without saying why.
+	notable := map[string]bool{"Mailbox already active": true, "Worker takeover": true,
+		"Stale lock auto-reset": true, "Job released — resuming": true,
+		"Completed by another worker": true, "Completed with warnings": true}
+	histStop := make(chan struct{})
+	go func() {
+		sub := bus.Subscribe()
+		seen := 0
+		for {
+			select {
+			case <-histStop:
+				return
+			case <-sub:
+			case <-time.After(2 * time.Second):
+			}
+			hist := bus.HistorySnapshot()
+			for ; seen < len(hist); seen++ {
+				e := hist[seen]
+				if notable[e.Event] {
+					fmt.Printf("%s: %s — %s\n", e.Event, e.Mailbox, e.Details)
+				}
+			}
+		}
+	}()
 	res, runErr := engine.RunMigrationBus(ctx, cfg, specs, stats, bus, session.Log,
 		report.MailboxLoggerFactory(cfg.LogsDir))
 	close(done)
+	close(histStop)
 	renderer.Stop(true)
 	signal.Stop(sigCh)
 	return res, runErr, interrupted
