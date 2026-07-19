@@ -3,7 +3,7 @@
 **High-Performance Native IMAP Migration Engine**
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/ajsap/mailferry?include_prereleases&sort=semver)](https://github.com/ajsap/mailferry/releases)
+[![Release](https://img.shields.io/github/v/release/ajsap/mailferry)](https://github.com/ajsap/mailferry/releases/latest)
 [![Dependencies: none](https://img.shields.io/badge/runtime%20dependencies-none-brightgreen.svg)](#installation)
 
 MailFerry migrates, synchronises and backs up IMAP mailboxes natively —
