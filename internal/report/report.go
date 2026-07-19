@@ -134,7 +134,8 @@ func WriteResultsCSV(snap engine.Snapshot, logsDir string) string {
 	defer w.Flush()
 	w.Write([]string{"index", "srcuser", "dstuser", "status", "exit_code",
 		"elapsed_seconds", "log_file", "notes", "error_type", "attempts",
-		"msgs_new", "msgs_adopted", "msgs_skipped", "msgs_failed", "bytes_done",
+		"msgs_new", "msgs_adopted", "msgs_prior", "msgs_planned",
+		"msgs_skipped", "msgs_failed", "bytes_done",
 		"folders", "reconnects", "retries"})
 	for _, m := range snap.Mailboxes {
 		elapsed := int64(0)
@@ -167,6 +168,7 @@ func WriteResultsCSV(snap engine.Snapshot, logsDir string) string {
 			fmt.Sprint(m.Index), m.Label, m.Label2, m.Status, exitOf[m.Status],
 			fmt.Sprint(elapsed), m.LogPath, notes, trunc(m.Error, 120),
 			fmt.Sprint(m.Attempt), fmt.Sprint(m.Appended), fmt.Sprint(m.Adopted),
+			fmt.Sprint(m.PriorDone), fmt.Sprint(m.Planned),
 			fmt.Sprint(m.Skipped), fmt.Sprint(m.FailedMsgs), fmt.Sprint(m.BytesDone),
 			folders, fmt.Sprint(m.Src.Reconnects + m.Dst.Reconnects), fmt.Sprint(m.Retries)})
 	}
@@ -216,6 +218,13 @@ func PrintSummary(snap engine.Snapshot, resultsPath string, cfg *config.Run,
 	fmt.Println(c(title, "bold"))
 	kv := func(k, v string) { fmt.Printf("%-21s: %s\n", k, v) }
 	kv("Total runtime", util.FmtDHMS(runtime))
+	kv("Run", cfg.RunID)
+	if cfg.DryRun {
+		kv("Mode", c("DRY RUN — nothing was written to either server or the State Database", "yellow"))
+	}
+	if cfg.Range.Active {
+		kv("Date range", cfg.Range.Label())
+	}
 	kv("Mailboxes in CSV", fmt.Sprint(len(snap.Mailboxes)))
 	attempted := agg.Counts["SUCCESS"] + agg.Counts["WARNINGS"] + agg.Counts["PARTIAL"] +
 		agg.Counts["FAILED"] + agg.Counts["STALE"]
@@ -228,6 +237,12 @@ func PrintSummary(snap engine.Snapshot, resultsPath string, cfg *config.Run,
 		kv("Partial", c(fmt.Sprint(n), "yellow"))
 	}
 	kv("Failed", fmt.Sprint(agg.Counts["FAILED"]))
+	if n := agg.Counts["STALE"]; n > 0 {
+		kv("Stale", c(fmt.Sprintf("%d — no progress; automatic recovery failed (see below)", n), "red"))
+	}
+	if n := agg.Counts["REMOTE"]; n > 0 {
+		kv("On other workers", c(fmt.Sprintf("%d — processed by other MailFerry processes sharing this State Database", n), "cyan"))
+	}
 	if n := agg.Counts["CANCELLED"]; n > 0 {
 		kv("Cancelled", c(fmt.Sprint(n), "yellow"))
 	}
@@ -238,11 +253,20 @@ func PrintSummary(snap engine.Snapshot, resultsPath string, cfg *config.Run,
 	kv("Messages synced", fmt.Sprintf("%d of %d (%s)", agg.MsgsDone, agg.MsgsTotal,
 		util.Pct(agg.MsgsDone, agg.MsgsTotal)))
 	kv("  copied (new)", fmt.Sprint(agg.Appended))
+	if agg.Planned > 0 {
+		kv("  would copy (plan)", c(fmt.Sprintf("%d — dry run, nothing was written", agg.Planned), "yellow"))
+	}
+	if agg.PriorDone > 0 {
+		kv("  confirmed (prior)", fmt.Sprintf("%d — already migrated in earlier runs", agg.PriorDone))
+	}
 	if agg.Adopted > 0 {
 		kv("  adopted (dup-safe)", fmt.Sprintf("%d — already on destination, not re-copied", agg.Adopted))
 	}
 	if agg.SkippedMsgs > 0 {
 		kv("  skipped msgs", c(fmt.Sprintf("%d (see per-mailbox logs)", agg.SkippedMsgs), "yellow"))
+	}
+	if agg.FailedMsgs > 0 {
+		kv("  failed msgs", c(fmt.Sprintf("%d — Failed Message Registry (mailferry failed / retry-failed)", agg.FailedMsgs), "red"))
 	}
 	kv("Data synced", util.FmtBytes(float64(agg.BytesDone)))
 	kv("Wire traffic", fmt.Sprintf("down %s / up %s",
@@ -253,21 +277,56 @@ func PrintSummary(snap engine.Snapshot, resultsPath string, cfg *config.Run,
 	if agg.Reconnects > 0 {
 		kv("Reconnects", fmt.Sprint(agg.Reconnects))
 	}
+	if agg.Retries > 0 {
+		kv("Retries used", fmt.Sprint(agg.Retries))
+	}
+	if snap.Stalls[0] > 0 {
+		v := fmt.Sprintf("%d — auto-recovered %d", snap.Stalls[0], snap.Stalls[1])
+		if snap.Stalls[2] > 0 {
+			v += c(fmt.Sprintf(" · recovery failed %d", snap.Stalls[2]), "red")
+		}
+		kv("Stalls detected", v)
+	}
+	if avg, slow, fast, n := MailboxTimings(snap); n >= 2 {
+		kv("Avg mailbox time", util.FmtDHMS(avg))
+		kv("Slowest mailbox", fmt.Sprintf("%s (%s)", slow.Label, util.FmtDHMS(slow.End.Sub(slow.Start).Seconds())))
+		kv("Fastest mailbox", fmt.Sprintf("%s (%s)", fast.Label, util.FmtDHMS(fast.End.Sub(fast.Start).Seconds())))
+	}
 	kv("Per-mailbox logs", cfg.LogsDir)
 	kv("Session log", filepath.Join(cfg.LogsDir, "session.log"))
 	kv("Results CSV", resultsPath)
-	kv("State Database", cfg.DBPath)
+	if cfg.Ephemeral {
+		kv("State Database", "ephemeral (--ephemeral) — nothing persisted")
+	} else {
+		kv("State Database", cfg.DBPath)
+	}
 	for _, h := range summaryHints(snap, c) {
 		fmt.Println(h)
 	}
 
-	var failed, partial []engine.MBValues
+	var failed, partial, stale, cancelled []engine.MBValues
 	for _, m := range snap.Mailboxes {
 		switch m.Status {
 		case "FAILED":
 			failed = append(failed, m)
 		case "PARTIAL":
 			partial = append(partial, m)
+		case "STALE":
+			stale = append(stale, m)
+		case "CANCELLED":
+			cancelled = append(cancelled, m)
+		case "WARNINGS":
+			nf := m.FailedMsgs + m.Skipped
+			tot := m.MsgsTotal
+			if tot == 0 {
+				tot = m.MsgsDone + nf
+			}
+			pw := 100.0
+			if tot > 0 {
+				pw = float64(m.MsgsDone) * 100 / float64(tot)
+			}
+			fmt.Println(c(fmt.Sprintf("  - %s — COMPLETED WITH WARNINGS: %d of %d migrated · %d in the registry (%.2f%%)",
+				m.Label, m.MsgsDone, tot, nf, pw), "yellow"))
 		}
 	}
 	if len(failed) > 0 {
@@ -282,9 +341,47 @@ func PrintSummary(snap engine.Snapshot, resultsPath string, cfg *config.Run,
 			fmt.Printf("  - %s — skipped %d, error: %s\n", m.Label, m.Skipped, trunc(m.Error, 120))
 		}
 	}
-	if len(failed)+len(partial) > 0 && !cfg.Ephemeral {
+	if len(stale) > 0 {
+		fmt.Println(c("Stale mailboxes (no progress; automatic recovery failed):", "red"))
+		for _, m := range stale {
+			fmt.Printf("  - %s — %s\n", m.Label, trunc(orNA(m.Error), 140))
+		}
+		fmt.Println(c("  Verify the server is reachable, then re-run — MailFerry resumes from the last confirmed state (never duplicates).", "cyan"))
+	}
+	if len(cancelled) > 0 {
+		fmt.Println(c(fmt.Sprintf("Cancelled mailboxes (%d):", len(cancelled)), "yellow"))
+		for _, m := range cancelled {
+			fmt.Printf("  - %s\n", m.Label)
+		}
+	}
+	if len(failed)+len(partial)+len(stale) > 0 && !cfg.Ephemeral {
 		fmt.Println(c("Resume: re-run the same command — completed messages are never re-copied.", "cyan"))
 	}
+}
+
+// MailboxTimings reports the average completed-mailbox duration plus the
+// slowest and fastest completed mailboxes (n = how many carried timings).
+// Shared by the headless summary and the Results view — one calculation,
+// one truth.
+func MailboxTimings(snap engine.Snapshot) (avg float64, slow, fast engine.MBValues, n int) {
+	var sum float64
+	for _, m := range snap.Mailboxes {
+		if (m.Status == "SUCCESS" || m.Status == "WARNINGS") && !m.Start.IsZero() && !m.End.IsZero() {
+			d := m.End.Sub(m.Start).Seconds()
+			sum += d
+			if n == 0 || d > slow.End.Sub(slow.Start).Seconds() {
+				slow = m
+			}
+			if n == 0 || d < fast.End.Sub(fast.Start).Seconds() {
+				fast = m
+			}
+			n++
+		}
+	}
+	if n > 0 {
+		avg = sum / float64(n)
+	}
+	return avg, slow, fast, n
 }
 
 func trunc(s string, n int) string {
@@ -308,16 +405,17 @@ func PrintFailedSection(rows []state.FailedRow, outstanding int64, logsDir strin
 	fmt.Println()
 	fmt.Println(colf(fmt.Sprintf("Failed Messages (%d outstanding):", outstanding), "red"))
 	limit := len(rows)
-	if limit > 20 {
-		limit = 20
+	if limit > 8 {
+		limit = 8
 	}
 	for _, r := range rows[:limit] {
 		fmt.Printf("  - %s · %s · UID %d · %s · %s\n", orNA(r.Mailbox), r.Folder,
 			r.SrcUID, util.FmtBytes(float64(r.Size)), r.FType)
-		fmt.Printf("      %s · %s\n", clipR(orNA(r.Subject), 48), clipR(r.Reason, 90))
+		fmt.Printf("      %s · %s\n", util.DecodeEllipsize(orNA(r.Subject), 56),
+			util.Ellipsize(r.Reason, 90))
 	}
-	if len(rows) > 20 {
-		fmt.Printf("  … +%d more\n", len(rows)-20)
+	if len(rows) > limit {
+		fmt.Printf("  … +%d more — full list: mailferry failed\n", len(rows)-limit)
 	}
 	fmt.Println(colf("  Full report: "+path+"   (JSON: mailferry failed --json)", "cyan"))
 	fmt.Println(colf("  Retry any time: mailferry retry-failed — circumstances change "+

@@ -47,6 +47,7 @@ type MailboxRunner struct {
 	existing      map[string]int64
 	poison        map[string]*poisonRec
 	leaseLost     atomic.Bool
+	priorSet      bool // PriorDone baseline captured once per runner
 }
 
 var errStaleFailed = fmt.Errorf("stale recovery exhausted")
@@ -124,8 +125,16 @@ func (r *MailboxRunner) SetExisting(folder string, n int64) {
 func (r *MailboxRunner) RefreshTotals() {
 	mt, md, bt, bd := r.DB.MailboxTotals(r.MID)
 	r.MB.Set(func(m *MBValues) {
+		if !r.priorSet {
+			// Baseline BEFORE this run does any work: everything the
+			// State Database already confirmed on the destination. Keeps
+			// MsgsDone == Appended + Adopted + PriorDone (+ Planned)
+			// reconcilable on resumes and idempotent reruns.
+			m.PriorDone = md
+		}
 		m.MsgsTotal, m.MsgsDone, m.BytesTotal, m.BytesDone = mt, md, bt, bd
 	})
+	r.priorSet = true
 }
 
 func (r *MailboxRunner) sleepInterruptible(d time.Duration) bool {
@@ -353,12 +362,8 @@ func (r *MailboxRunner) Run() string {
 		if tot == 0 {
 			tot = v.MsgsDone + nf
 		}
-		pctv := 100.0
-		if tot > 0 {
-			pctv = float64(v.MsgsDone) * 100 / float64(tot)
-		}
-		det = fmt.Sprintf("%d/%d migrated · %d failed · %.2f%% complete — see the Failed Message Registry",
-			v.MsgsDone, tot, nf, pctv)
+		det = fmt.Sprintf("%d/%d migrated · %d failed · %s complete — see the Failed Message Registry",
+			v.MsgsDone, tot, nf, util.Pct(v.MsgsDone, tot))
 	} else if status != "SUCCESS" && r.firstError != "" {
 		det += " · " + r.firstError
 	}

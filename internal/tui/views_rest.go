@@ -302,6 +302,27 @@ func (m *Model) errorsView(w, h int) string {
 		head += "   /" + q
 	}
 	b.WriteString(cBold.Render(head) + "\n\n")
+	// After completion this view doubles as the Failed Messages browser:
+	// the outstanding registry entries, subjects decoded for humans.
+	if m.results != nil && len(m.results.Res.FailedRegistry) > 0 {
+		rows := m.results.Res.FailedRegistry
+		b.WriteString(cRed.Render(fmt.Sprintf(" FAILED MESSAGE REGISTRY — %d outstanding", len(rows))) + "\n")
+		lim := len(rows)
+		if avail := (h - 6 - min(len(errs), 5)); lim > avail && avail >= 3 {
+			lim = avail
+		}
+		for _, r := range rows[:lim] {
+			b.WriteString(fmt.Sprintf("  %-22s %-12s UID %-6d %-9s %s\n",
+				clip(r.Mailbox, 22), clip(r.Folder, 12), r.SrcUID,
+				util.FmtBytes(float64(r.Size)), r.FType))
+			b.WriteString(cDim.Render(fmt.Sprintf("      %s · %s\n",
+				util.DecodeEllipsize(orEmpty(r.Subject), 56), util.Ellipsize(r.Reason, w-70))))
+		}
+		if lim < len(rows) {
+			b.WriteString(cDim.Render(fmt.Sprintf("  … +%d more — mailferry failed\n", len(rows)-lim)))
+		}
+		b.WriteString("\n")
+	}
 	if len(errs) == 0 {
 		b.WriteString(cGreen.Render("  no errors recorded — all clear") + "\n")
 		return b.String()

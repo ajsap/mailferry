@@ -22,7 +22,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -91,6 +93,14 @@ func cmdAttach(rest []string) int {
 	defer restoreTerm()                         // same guarantee as the main TUI
 	termstate.Snapshot("pre-tui-attach")
 	p := tea.NewProgram(model, tea.WithAltScreen())
+	hupCh := make(chan os.Signal, 1)
+	signal.Notify(hupCh, syscall.SIGHUP)
+	defer func() { signal.Stop(hupCh); close(hupCh) }()
+	go func() { // hangup: quit cleanly, never die in raw mode
+		if _, ok := <-hupCh; ok {
+			p.Send(tea.QuitMsg{})
+		}
+	}()
 	if _, err := p.Run(); err != nil {
 		// The monitor is a pure reader; if the TUI cannot start, fall back to
 		// a one-shot snapshot rather than failing.

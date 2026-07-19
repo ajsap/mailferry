@@ -17,7 +17,7 @@ package identity
 import "fmt"
 
 const (
-	Version      = "2.0.2"
+	Version      = "2.0.3"
 	Product      = "MailFerry"
 	Title        = "MailFerry – IMAP Migration & Sync"
 	Slogan       = "High-Performance Native IMAP Migration Engine"

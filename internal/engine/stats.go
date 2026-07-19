@@ -51,13 +51,20 @@ type MBValues struct {
 	DupSkipped   int64
 	Skipped      int64
 	FailedMsgs   int64
-	Retries      int64
-	Error        string
-	Start        time.Time
-	End          time.Time
-	Src          SideValues
-	Dst          SideValues
-	LogPath      string
+	// PriorDone: messages already confirmed on the destination BEFORE
+	// this run started (per-UID State Database rows) - MsgsDone counts
+	// them, while Appended/Adopted are this-run deltas. Planned: dry-run
+	// would-be copies. Together they close the accounting identity:
+	//   MsgsDone == Appended + Adopted + PriorDone + Planned
+	PriorDone int64
+	Planned   int64
+	Retries   int64
+	Error     string
+	Start     time.Time
+	End       time.Time
+	Src       SideValues
+	Dst       SideValues
+	LogPath   string
 }
 
 type MBStats struct {
@@ -211,6 +218,7 @@ type Agg struct {
 	MsgsDone, MsgsTotal, BytesDone, BytesTotal      int64
 	Appended, Adopted, DupSkipped, SkippedMsgs      int64
 	FailedMsgs, Retries, Reconnects, WireRX, WireTX int64
+	PriorDone, Planned                              int64
 	Counts                                          map[string]int
 }
 
@@ -226,6 +234,8 @@ func (s Snapshot) Agg() Agg {
 		a.DupSkipped += m.DupSkipped
 		a.SkippedMsgs += m.Skipped
 		a.FailedMsgs += m.FailedMsgs
+		a.PriorDone += m.PriorDone
+		a.Planned += m.Planned
 		a.Retries += m.Retries
 		a.Reconnects += m.Src.Reconnects + m.Dst.Reconnects
 		a.WireRX += m.Src.RXBytes + m.Dst.RXBytes

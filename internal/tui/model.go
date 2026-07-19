@@ -43,6 +43,21 @@ var viewNames = [numViews]string{
 	"Performance", "Logs", "Settings", "Help",
 }
 
+// vResults is the completion screen: not an F-key view — the model
+// switches to it when the migration finishes, and it becomes "home"
+// (Esc/q from other views return here; from here they exit).
+const vResults = numViews
+
+func viewName(i int) string {
+	if i == vResults {
+		return "Results"
+	}
+	if i >= 0 && i < numViews {
+		return viewNames[i]
+	}
+	return "?"
+}
+
 // tickMsg drives periodic re-render (display cadence only — the engine is
 // never gated on it).
 type tickMsg time.Time
@@ -103,8 +118,13 @@ type Model struct {
 	searching  bool
 	search     string
 	searchView int
-	popup      *popupState
-	flash      string
+
+	// completion state (Results view)
+	finished     bool       // engine done — Results is home
+	resultsShown bool       // the operator saw the Results screen
+	results      *ResultMsg // authoritative end-of-run payload
+	popup        *popupState
+	flash        string
 
 	// system telemetry (informational only)
 	mon      *sysmon.Mon
@@ -352,3 +372,8 @@ func (m *Model) eta() (float64, bool) {
 	}
 	return 0, false
 }
+
+// ResultsShown reports whether the operator landed on the Results screen —
+// the runner uses it to print a short exit confirmation instead of the
+// full report (no duplicate information after the TUI).
+func (m *Model) ResultsShown() bool { return m.resultsShown }

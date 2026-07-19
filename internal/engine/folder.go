@@ -719,6 +719,7 @@ func (s *folderSyncer) transferPass(rows []state.MsgRow, stripKeywords bool,
 				out.Copied++
 				mb.Add(func(m *MBValues) {
 					m.MsgsDone++
+					m.Planned++ // dry run: WOULD be copied - keeps counters reconciled
 					m.BytesDone += size
 				})
 				continue

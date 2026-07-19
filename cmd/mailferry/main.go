@@ -644,8 +644,9 @@ func cmdRun(cmd string, rest []string) int {
 
 	var res engine.RunResult
 	var runErr error
+	resultsShown := false
 	if interactive {
-		res, runErr, interrupted = runInteractive(ctx, cancel, cfg, specs, stats, bus, session)
+		res, runErr, interrupted, resultsShown = runInteractive(ctx, cancel, cfg, specs, stats, bus, session)
 	} else {
 		res, runErr, interrupted = runHeadless(ctx, cancel, cfg, specs, stats, bus, session)
 	}
@@ -663,13 +664,26 @@ func cmdRun(cmd string, rest []string) int {
 		res.Counts["FAILED"], res.Counts["STALE"], res.Counts["CANCELLED"],
 		map[bool]string{true: " (interrupted)"}[interrupted]))
 	termstate.Snapshot("pre-report")
-	report.PrintSummary(snap, resultsPath, cfg, runtimeS, interrupted, progress.C)
-	if n := res.Counts["REMOTE"]; n > 0 {
-		fmt.Println(progress.C(fmt.Sprintf("Handled by other workers : %d mailbox(es) were "+
-			"actively owned by other MailFerry processes (details above and in the "+
-			"session log) — they were mirrored, not duplicated.", n), "cyan"))
+	if resultsShown && !interrupted {
+		// The operator reviewed the Results screen inside the TUI and quit
+		// deliberately — print a short confirmation, never a second report.
+		fmt.Printf("Run %s complete: %d successful · %d with warnings · %d failed\n",
+			cfg.RunID, res.Counts["SUCCESS"], res.Counts["WARNINGS"], res.Counts["FAILED"])
+		fmt.Println("Results: " + resultsPath + " · logs: " + cfg.LogsDir)
+		if res.Outstanding > 0 {
+			fmt.Println(progress.C(fmt.Sprintf(
+				"Outstanding failed messages: %d — mailferry failed · mailferry retry-failed",
+				res.Outstanding), "yellow"))
+		}
+	} else {
+		report.PrintSummary(snap, resultsPath, cfg, runtimeS, interrupted, progress.C)
+		if n := res.Counts["REMOTE"]; n > 0 {
+			fmt.Println(progress.C(fmt.Sprintf("Handled by other workers : %d mailbox(es) were "+
+				"actively owned by other MailFerry processes (details above and in the "+
+				"session log) — they were mirrored, not duplicated.", n), "cyan"))
+		}
+		report.PrintFailedSection(res.FailedRegistry, res.Outstanding, cfg.LogsDir, progress.C)
 	}
-	report.PrintFailedSection(res.FailedRegistry, res.Outstanding, cfg.LogsDir, progress.C)
 	if bootCreated {
 		fmt.Println(progress.C("note: a documented default configuration was written to "+
 			bootPath+" on this first operational run.", "cyan"))
@@ -747,18 +761,46 @@ func escalate(bus *engine.Bus, session *report.Session, done <-chan struct{}) {
 // lost terminal can never corrupt migration state.
 func runInteractive(ctx context.Context, cancel context.CancelFunc,
 	cfg *config.Run, specs []config.MailboxSpec, stats *engine.Stats, bus *engine.Bus,
-	session *report.Session) (engine.RunResult, error, bool) {
+	session *report.Session) (engine.RunResult, error, bool, bool) {
 	session.Log(fmt.Sprintf("=== %s — run %s start (TUI): rows=%d workers=%d db=%s",
 		identity.BannerLine(), cfg.RunID, len(specs), cfg.Workers, cfg.DBPath))
 	var res engine.RunResult
 	var runErr error
 	done := make(chan struct{})
+	resCh := make(chan tui.ResultMsg, 1)
 	go func() {
 		defer func() { // a crashed engine must never leave the terminal raw
 			if r := recover(); r != nil {
 				runErr = fmt.Errorf("engine panic: %v", r)
 				session.Log(fmt.Sprintf("FATAL engine panic: %v", r))
 			}
+			if runErr == nil {
+				// Authoritative results payload for the TUI Results view,
+				// delivered BEFORE the done signal so the final screen
+				// renders complete on its first frame. Reports are written
+				// now so every path on screen already exists.
+				snapNow := stats.Snapshot()
+				resultsCSV := report.WriteResultsCSV(snapNow, cfg.LogsDir)
+				failedCSV := ""
+				if len(res.FailedRegistry) > 0 {
+					failedCSV = filepath.Join(cfg.LogsDir, "failed_messages.csv")
+					_ = report.WriteFailedCSVTo(res.FailedRegistry, failedCSV)
+				}
+				rangeLabel := ""
+				if cfg.Range.Active {
+					rangeLabel = cfg.Range.Label()
+				}
+				resCh <- tui.ResultMsg{
+					Res: res, RunID: cfg.RunID,
+					WorkerID: state.ShortWorker(state.LeaseOwnerID()),
+					DryRun:   cfg.DryRun, RangeLabel: rangeLabel,
+					Portable: paths.PortableActive(), Ephemeral: cfg.Ephemeral,
+					ResultsCSV: resultsCSV, FailedCSV: failedCSV,
+					SessionLog: filepath.Join(cfg.LogsDir, "session.log"),
+					Runtime:    time.Since(snapNow.BatchStart).Seconds(),
+				}
+			}
+			close(resCh)
 			close(done)
 		}()
 		res, runErr = engine.RunMigrationBus(ctx, cfg, specs, stats, bus, session.Log,
@@ -785,9 +827,34 @@ func runInteractive(ctx context.Context, cancel context.CancelFunc,
 	restoreTerm := captureTerminal()
 	termstate.Snapshot("pre-tui")
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, runUIErr := p.Run()
+	go func() { // forward the results payload into the running program
+		if r, ok := <-resCh; ok {
+			p.Send(r)
+		}
+	}()
+	// SIGHUP (SSH drop, terminal window closed) previously killed the
+	// process mid-raw-mode — the classic way a session ends up with the
+	// stair-step terminal. Treat it as a graceful stop: abort the engine,
+	// unwind the TUI cleanly, restore the terminal, exit as interrupted.
+	hupCh := make(chan os.Signal, 1)
+	signal.Notify(hupCh, syscall.SIGHUP)
+	go func() {
+		if _, ok := <-hupCh; ok {
+			session.Log("SIGHUP received (terminal hangup) — graceful stop; " +
+				"terminal state restored, state committed per message")
+			cancel()
+			p.Send(tea.QuitMsg{})
+		}
+	}()
+	finalModel, runUIErr := p.Run()
+	signal.Stop(hupCh)
+	close(hupCh)
 	restoreTerm() // guarantee: cooked mode + primary screen on EVERY path
 	termstate.Snapshot("post-tui")
+	resultsShown := false
+	if mm, ok := finalModel.(*tui.Model); ok {
+		resultsShown = mm.ResultsShown()
+	}
 	if runUIErr != nil {
 		// TUI failed: never abort the migration — fall back to waiting headless
 		fmt.Fprintln(os.Stderr, "note: TUI unavailable (", runUIErr, ") — continuing headless")
@@ -804,7 +871,7 @@ func runInteractive(ctx context.Context, cancel context.CancelFunc,
 	} else {
 		<-done
 	}
-	return res, runErr, ctx.Err() != nil
+	return res, runErr, ctx.Err() != nil, resultsShown
 }
 
 // runHeadless runs the same engine with clean structured console output.
@@ -813,7 +880,7 @@ func runHeadless(ctx context.Context, cancel context.CancelFunc, cfg *config.Run
 	session *report.Session) (engine.RunResult, error, bool) {
 	progress.IsTTY = false
 	sigCh := make(chan os.Signal, 2)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	interrupted := false
 	done := make(chan struct{})
 	go func() {
@@ -1531,8 +1598,9 @@ func cmdFailed(rest []string) int {
 	for _, r := range rows {
 		fmt.Printf("  %-24s %-14s UID %-6d %-9s %-16s %s\n", clipS(r.Mailbox, 24),
 			clipS(r.Folder, 14), r.SrcUID, util.FmtBytes(float64(r.Size)), r.FType, r.Status)
-		fmt.Printf("      %s · %s · failed %dx · %s\n", orDashS(r.Subject),
-			orDashS(r.Sender), r.FailCount, clipS(r.Reason, 80))
+		fmt.Printf("      %s · %s · failed %dx · %s\n",
+			util.DecodeEllipsize(orDashS(r.Subject), 64),
+			util.DecodeEllipsize(orDashS(r.Sender), 40), r.FailCount, clipS(r.Reason, 80))
 	}
 	fmt.Println(progress.C("\nRetry: mailferry retry-failed [--mailbox USER] · "+
 		"Export: --csv FILE / --json · Silence: --ignore", "cyan"))

@@ -13,6 +13,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notarised.
 - OAuth 2.0, MULTIAPPEND, QRESYNC, quarantine purge (v2.1.0).
 
+## [2.0.3] - 2026-07-19
+
+Patch release: the polished MailFerry Results experience — an interactive
+migration now finishes on a native Results screen instead of dumping a
+raw report — plus statistics-correctness refinements. Migration
+semantics are untouched; the v2.0.2 terminal-state fix (verified on the
+affected macOS arm64 system) is fully preserved.
+
+### Added
+
+- **Results TUI**: interactive runs land on a polished final screen in
+  the dashboard's visual language, with distinct verdicts — MIGRATION
+  COMPLETE, MIGRATION COMPLETED WITH WARNINGS, MIGRATION COMPLETE —
+  NOTHING NEW TO COPY, and DRY RUN COMPLETE — plus Run and Messages
+  panels, a problems-first per-mailbox results table, and a concise
+  "Needs attention" panel (outstanding count, affected mailboxes and
+  folders, F6 / `mailferry retry-failed` / report path). Individual
+  failed-message entries deliberately stay in the detail surfaces: F6
+  (which now doubles as the Failed Messages browser after completion),
+  `mailferry failed [--json/--csv]`, failed_messages.csv and the logs.
+  Navigation: Enter → Mailboxes, F1–F10 views, S → Reports & files
+  popup, Q/Esc → exit. After quitting, the shell gets a short
+  confirmation — never a duplicate report. Headless/non-TTY runs keep
+  the structured text report (never a forced TUI).
+- **Statistics completeness**: two new authoritative counters close the
+  accounting identity `synced = copied + adopted + prior-confirmed +
+  dry-run-planned`, now enforced by invariant tests against the real
+  engine: `PriorDone` (messages confirmed on the destination by earlier
+  runs) and `Planned` (dry-run would-be copies). Both appear
+  contextually in the Results view, the headless summary
+  ("confirmed (prior)", "would copy (plan)") and results.csv
+  (msgs_prior, msgs_planned columns).
+- **RFC 2047 subject decoding** wherever failed-message subjects are
+  shown interactively (`mailferry failed`, the headless Failed Messages
+  section, the F6 registry browser), with clean ellipsis truncation —
+  an encoded word is never cut in half at display time; undecodable
+  values fall back verbatim.
+- Restored v1.x informational parity in the headless summary: Run ID,
+  stale and on-other-workers counts, aggregate failed-message line,
+  average/slowest/fastest mailbox timings, retries, stall statistics,
+  per-warned-mailbox breakdown, stale/cancelled listings and the
+  ephemeral State-Database note.
+
+### Fixed
+
+- **SIGHUP no longer kills MailFerry in raw mode.** A terminal hangup
+  mid-TUI (SSH drop, closed terminal window) terminated every previous
+  release with the terminal still in raw/alternate-screen state — the
+  classic origin of a "stair-step" session (self-healed since v2.0.2 on
+  the NEXT run, but the source remained). SIGHUP is now a graceful
+  stop: the engine aborts cleanly (per-message state committed), the
+  TUI unwinds, the terminal is restored, and the process exits with
+  the interrupted status. Headless runs and `mailferry attach` treat
+  SIGHUP the same way. Verified by a PTY regression test that delivers
+  SIGHUP mid-transfer and asserts a clean terminal afterwards.
+- **Percentages can no longer overstate completion.** The one
+  authoritative renderer (used by the dashboard, Results view, headless
+  summary and attach) shows 100% only when done truly equals total:
+  26,081 of 26,089 now renders 99.9%, never 100%; symmetrically, real
+  progress never rounds down to 0%. The same rule now applies to the
+  completed-with-warnings history detail.
+
+### Changed
+
+- docs/img screenshots regenerated from the current v2.0.3 interface
+  (synthetic RFC 2606 fixture data only), including the new Results
+  screen; docs/img/tui-dashboard.png no longer shows RC-era branding.
+
 ## [2.0.2] - 2026-07-19
 
 Patch release: terminal output now renders correctly even when the
@@ -602,7 +670,8 @@ Engine.
   suite (34 checks).
 - Packaging: standalone `mailferry.pyz` (zipapp), source archive, wheel.
 
-[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.3...HEAD
+[2.0.3]: https://github.com/ajsap/mailferry/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/ajsap/mailferry/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/ajsap/mailferry/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.3...v2.0.0

@@ -32,8 +32,8 @@ const goodHeader = "srchost,srcport,srcsecurity,srcuser,srcpassword," +
 
 func TestCSVValidFileParses(t *testing.T) {
 	body := goodHeader +
-		"imap.a.com,993,ssl,ann@a.com,pw1,imap.b.org,993,ssl,ann@b.org,pw2\n" +
-		"imap.a.com,143,starttls,bob@a.com,pw3,imap.b.org,,none,bob@b.org,pw4\n"
+		"imap.example.com,993,ssl,ann@example.com,pw1,imap.example.org,993,ssl,ann@example.org,pw2\n" +
+		"imap.example.com,143,starttls,bob@example.com,pw3,imap.example.org,,none,bob@example.org,pw4\n"
 	specs, err := ValidateCSV(writeCSV(t, body))
 	if err != nil {
 		t.Fatalf("valid CSV rejected: %v", err)
@@ -48,14 +48,14 @@ func TestCSVValidFileParses(t *testing.T) {
 	if specs[1].Dst.Port != 143 {
 		t.Fatalf("empty port with none should default to 143, got %d", specs[1].Dst.Port)
 	}
-	if specs[0].Src.Port != 993 || specs[0].Dst.User != "ann@b.org" {
+	if specs[0].Src.Port != 993 || specs[0].Dst.User != "ann@example.org" {
 		t.Fatalf("row 1 parsed wrong: %+v", specs[0])
 	}
 }
 
 func TestCSVSecurityAliasTLSMeansStartTLS(t *testing.T) {
 	body := goodHeader +
-		"imap.a.com,143,tls,ann@a.com,pw1,imap.b.org,143,tls,ann@b.org,pw2\n"
+		"imap.example.com,143,tls,ann@example.com,pw1,imap.example.org,143,tls,ann@example.org,pw2\n"
 	specs, err := ValidateCSV(writeCSV(t, body))
 	if err != nil {
 		t.Fatalf("legacy 'tls' alias rejected: %v", err)
@@ -67,7 +67,7 @@ func TestCSVSecurityAliasTLSMeansStartTLS(t *testing.T) {
 
 func TestCSVDefaultPortForSSL(t *testing.T) {
 	body := goodHeader +
-		"imap.a.com,,ssl,ann@a.com,pw1,imap.b.org,,ssl,ann@b.org,pw2\n"
+		"imap.example.com,,ssl,ann@example.com,pw1,imap.example.org,,ssl,ann@example.org,pw2\n"
 	specs, err := ValidateCSV(writeCSV(t, body))
 	if err != nil {
 		t.Fatal(err)
@@ -95,9 +95,9 @@ func TestCSVAggregatesEveryError(t *testing.T) {
 	// row must NOT rescue the file: any error blocks the whole migration, and
 	// every problem is reported at once.
 	body := goodHeader +
-		"imap.a.com,993,ssl,ann@a.com,pw1,imap.b.org,993,ssl,ann@b.org,pw2\n" + // good
-		",70000,bogus,,pw3,imap.b.org,993,ssl,bob@b.org,pw4\n" + // bad: host empty, port range, security, user empty
-		"imap.a.com,143,ssl,carl@a.com,pw5,imap.b.org,143,ssl,,\n" // bad: dstuser empty, dstpassword empty
+		"imap.example.com,993,ssl,ann@example.com,pw1,imap.example.org,993,ssl,ann@example.org,pw2\n" + // good
+		",70000,bogus,,pw3,imap.example.org,993,ssl,bob@example.org,pw4\n" + // bad: host empty, port range, security, user empty
+		"imap.example.com,143,ssl,carl@example.com,pw5,imap.example.org,143,ssl,,\n" // bad: dstuser empty, dstpassword empty
 	_, err := ValidateCSV(writeCSV(t, body))
 	if err == nil {
 		t.Fatal("CSV with errors was accepted")
@@ -123,7 +123,7 @@ func TestCSVAggregatesEveryError(t *testing.T) {
 func TestCSVMissingColumnHeader(t *testing.T) {
 	// drop dstpassword
 	bad := "srchost,srcport,srcsecurity,srcuser,srcpassword,dsthost,dstport,dstsecurity,dstuser\n" +
-		"imap.a.com,993,ssl,ann@a.com,pw1,imap.b.org,993,ssl,ann@b.org\n"
+		"imap.example.com,993,ssl,ann@example.com,pw1,imap.example.org,993,ssl,ann@example.org\n"
 	_, err := ValidateCSV(writeCSV(t, bad))
 	if err == nil || !strings.Contains(err.Error(), "dstpassword") {
 		t.Fatalf("missing header column not reported: %v", err)
@@ -158,7 +158,7 @@ func TestCSVObsoleteV1HeaderHint(t *testing.T) {
 }
 
 func TestCSVWrongColumnCountRow(t *testing.T) {
-	bad := goodHeader + "imap.a.com,993,ssl,ann@a.com,pw1,imap.b.org,993,ssl\n" // too few columns
+	bad := goodHeader + "imap.example.com,993,ssl,ann@example.com,pw1,imap.example.org,993,ssl\n" // too few columns
 	_, err := ValidateCSV(writeCSV(t, bad))
 	if err == nil || !strings.Contains(err.Error(), "column(s), expected") {
 		t.Fatalf("mis-shaped row not reported: %v", err)
@@ -168,7 +168,7 @@ func TestCSVWrongColumnCountRow(t *testing.T) {
 func TestCSVBlankRowsSkipped(t *testing.T) {
 	body := goodHeader +
 		"\n" +
-		"imap.a.com,993,ssl,ann@a.com,pw1,imap.b.org,993,ssl,ann@b.org,pw2\n" +
+		"imap.example.com,993,ssl,ann@example.com,pw1,imap.example.org,993,ssl,ann@example.org,pw2\n" +
 		"   \n"
 	specs, err := ValidateCSV(writeCSV(t, body))
 	if err != nil {
@@ -187,7 +187,7 @@ func TestCSVMissingFileReturnsError(t *testing.T) {
 
 // ParseCSV is the public entry point and must be exactly ValidateCSV.
 func TestParseCSVDelegatesToValidate(t *testing.T) {
-	body := goodHeader + "imap.a.com,993,ssl,ann@a.com,pw1,imap.b.org,993,ssl,ann@b.org,pw2\n"
+	body := goodHeader + "imap.example.com,993,ssl,ann@example.com,pw1,imap.example.org,993,ssl,ann@example.org,pw2\n"
 	p := writeCSV(t, body)
 	a, err1 := ParseCSV(p)
 	b, err2 := ValidateCSV(p)

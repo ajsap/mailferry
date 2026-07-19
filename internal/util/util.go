@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"regexp"
 	"strings"
@@ -63,11 +64,32 @@ func FmtDHMS(secs float64) string {
 	return fmt.Sprintf("%d day %02d:%02d:%02d", d, h, m, s%60)
 }
 
+// Pct is THE authoritative percentage rendering for message/byte progress
+// everywhere MailFerry reports it (dashboard, Results view, headless
+// summary, attach). Correctness rules:
+//   - "100%" appears ONLY when done truly equals total — an incomplete
+//     run must never round up to 100% and imply nothing is outstanding
+//     (99.97% renders as 99.9%, floored, one decimal).
+//   - Symmetrically, real progress never rounds down to "0%".
 func Pct(done, total int64) string {
 	if total <= 0 {
 		return "-"
 	}
-	return fmt.Sprintf("%.0f%%", float64(done)*100/float64(total))
+	if done >= total {
+		return "100%"
+	}
+	p := float64(done) * 100 / float64(total)
+	if p > 99 {
+		v := math.Floor(p*10) / 10
+		if v >= 100 {
+			v = 99.9
+		}
+		return fmt.Sprintf("%.1f%%", v)
+	}
+	if p < 1 && done > 0 {
+		return fmt.Sprintf("%.1f%%", math.Ceil(p*10)/10)
+	}
+	return fmt.Sprintf("%.0f%%", p)
 }
 
 func SafeName(s string) string {

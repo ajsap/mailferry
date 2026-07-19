@@ -41,9 +41,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// shows every task finishing (engine has already unwound)
 			return m, m.phaseCmd()
 		}
-		m.quitting = true
+		// Natural completion: land on the Results screen — never dump to
+		// the shell. The operator inspects, then exits with Q/Esc.
+		m.finished = true
+		m.resultsShown = true
 		m.stopSysmon()
-		return m, tea.Quit
+		m.snap = m.stats.Snapshot()
+		m.active = vResults
+		return m, nil
+
+	case ResultMsg:
+		m.results = &msg
+		if m.finished {
+			m.active = vResults
+		}
+		return m, nil
 
 	case phaseMsg:
 		m.shutPhase++
@@ -84,6 +96,12 @@ func (m *Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Ctrl+C: graceful shutdown dialog; a second Ctrl+C forces exit.
 	if key == "ctrl+c" {
+		if m.finished {
+			// engine already done — nothing to stop; exit cleanly
+			m.quitting = true
+			m.stopSysmon()
+			return m, tea.Quit
+		}
 		if m.shuttingDown {
 			m.forced = true
 			if m.hardKC != nil {
@@ -133,6 +151,22 @@ func (m *Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Results screen keys (completion home)
+	if m.active == vResults {
+		switch key {
+		case "enter":
+			m.active = vMailboxes
+			return m, nil
+		case "s", "S":
+			m.openReportsPopup()
+			return m, nil
+		case "esc", "q":
+			m.quitting = true
+			m.stopSysmon()
+			return m, tea.Quit
+		}
+	}
+
 	// vim-style navigation everywhere
 	if key == "k" {
 		key = "up"
@@ -159,6 +193,8 @@ func (m *Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.search != "" {
 			m.search = ""
 			m.searchView = -1
+		} else if m.finished {
+			m.active = vResults // completion home
 		} else {
 			m.active = vDashboard
 		}

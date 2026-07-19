@@ -71,8 +71,8 @@ func (m *Model) safeBody(w, h int) (out string) {
 	defer func() {
 		if r := recover(); r != nil {
 			m.bus.Log("ERROR", "tui", fmt.Sprintf("view %q failed to render: %v",
-				viewNames[m.active], r))
-			out = "\n" + cRed.Render(fmt.Sprintf("  The %s view failed to render.", viewNames[m.active])) +
+				viewName(m.active), r))
+			out = "\n" + cRed.Render(fmt.Sprintf("  The %s view failed to render.", viewName(m.active))) +
 				"\n\n  The migration continues unaffected.\n" +
 				cDim.Render("  Press 1 for the Dashboard, or 8 to check the Logs.")
 		}
@@ -113,7 +113,15 @@ func (m *Model) footer(w int) string {
 	if m.searching {
 		return cCyan.Render(clip(fmt.Sprintf(" search: /%s▏  (⏎ keep · Esc clear)", m.search), w))
 	}
-	hint := viewFooters[m.active]
+	hint := ""
+	if m.active == vResults {
+		hint = "⏎ Mailboxes   F1–F10 Views   F6 Failed msgs   F8 Logs   S Reports   Q/Esc Quit"
+	} else {
+		hint = viewFooters[m.active]
+		if m.finished {
+			hint = "Esc/q Results   " + hint
+		}
+	}
 	if m.flash != "" {
 		hint = m.flash + "   ·   " + hint
 		m.flash = ""
@@ -156,6 +164,8 @@ func (m *Model) body(w, h int) string {
 		return m.settingsView(w, h)
 	case vHelp:
 		return m.helpView(w, h)
+	case vResults:
+		return m.resultsView(w, h)
 	}
 	return ""
 }

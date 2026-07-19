@@ -12,7 +12,7 @@ binary speaks IMAP directly to both servers, streams messages
 source-to-destination with bounded memory, and records per-message state
 in an SQLite database so every run is resumable and duplicate-free.
 
-> **Release status: `v2.0.2` (stable).**
+> **Release status: `v2.0.3` (stable).**
 > v1.0.0 was the original Python implementation; development continued
 > unreleased after it and served as the behavioural reference for the
 > complete native Go rewrite that is v2, released as stable v2.0.0
@@ -27,6 +27,12 @@ in an SQLite database so every run is resumable and duplicate-free.
 - **Licence:** GNU AGPL v3.0
 
 ![MailFerry TUI dashboard](docs/img/tui-dashboard.png)
+
+A migration finishes on a native **Results screen** — verdict, run and
+message statistics, per-mailbox outcomes and a concise "Needs
+attention" panel when anything is outstanding:
+
+![MailFerry Results screen](docs/img/tui-results.png)
 
 ## Why the Go rewrite
 
@@ -101,8 +107,8 @@ checksum, make it executable, run it. There is nothing else to install.
 
 ```sh
 shasum -a 256 -c SHA256SUMS          # verify (macOS: shasum, Linux: sha256sum)
-chmod +x mailferry-v2.0.2-darwin-arm64
-./mailferry-v2.0.2-darwin-arm64 version
+chmod +x mailferry-v2.0.3-darwin-arm64
+./mailferry-v2.0.3-darwin-arm64 version
 ```
 
 Targets: `darwin-arm64` (all Apple Silicon), `darwin-amd64` (Intel Macs),

@@ -18,12 +18,15 @@ import (
 	"time"
 
 	"github.com/ajsap/mailferry/v2/internal/engine"
+	"github.com/ajsap/mailferry/v2/internal/state"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
 
 // RenderShot returns one fully rendered frame of the named view using
-// synthetic fixture data. Views: dashboard, workers, history, logs.
+// synthetic fixture data (RFC-2606 example domains only). Views:
+// dashboard, workers, history, logs, results-success, results-warnings,
+// results-nothing.
 func RenderShot(view string) string {
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	stats := engine.NewStats()
@@ -147,10 +150,112 @@ func RenderShot(view string) string {
 		m.active = vHistory
 	case "logs":
 		m.active = vLogs
+	case "results-success", "results-warnings", "results-nothing":
+		finalizeShotStats(stats, view, now)
+		m.snap = stats.Snapshot()
+		m.finished = true
+		m.resultsShown = true
+		m.results = shotResult(view)
+		m.active = vResults
 	default:
 		m.active = vDashboard
 	}
 	frame := m.View()
 	m.stopSysmon()
 	return frame
+}
+
+// finalizeShotStats converts the live fixture into a finished batch for
+// the Results-view screenshots. Fictional data only.
+func finalizeShotStats(stats *engine.Stats, view string, now time.Time) {
+	for i, mb := range stats.Mailboxes {
+		i := i
+		mb.Set(func(v *engine.MBValues) {
+			v.Op, v.Detail, v.Error = "", "", ""
+			if v.MsgsTotal == 0 {
+				v.MsgsTotal = int64(900 + 331*i)
+				v.BytesTotal = int64(120<<20 + i*33<<20)
+			}
+			v.MsgsDone, v.BytesDone = v.MsgsTotal, v.BytesTotal
+			v.FolderIndex, v.FoldersTotal = maxI(v.FoldersTotal, 4), maxI(v.FoldersTotal, 4)
+			v.Status = "SUCCESS"
+			v.FailedMsgs, v.Skipped = 0, 0
+			if v.Start.IsZero() {
+				v.Start = now.Add(-time.Duration(80+i*9) * time.Minute)
+			}
+			v.End = now.Add(-time.Duration(i) * time.Minute)
+			switch view {
+			case "results-nothing":
+				v.Appended, v.Adopted = 0, v.MsgsTotal
+				v.Start = now.Add(-time.Duration(25+i*3) * time.Second)
+				v.End = now.Add(-time.Duration(i) * time.Second)
+				// verification pass only: tiny wire traffic, no uploads
+				v.Src.RXBytes = int64(38<<10 + i*9<<10)
+				v.Dst.TXBytes = int64(2<<10 + i<<10)
+			case "results-warnings":
+				v.Appended, v.Adopted = v.MsgsTotal, 0
+				if i == 2 { // user3: completed with warnings, 8 in registry
+					v.Status = "WARNINGS"
+					v.FailedMsgs = 8
+					v.MsgsDone = v.MsgsTotal - 8
+				}
+			default:
+				v.Appended, v.Adopted = v.MsgsTotal, 0
+			}
+			// Engine invariant (also asserted by tests): synced messages
+			// are exactly the copied plus the adopted ones. Failed
+			// messages are never inside MsgsDone.
+			v.Appended = v.MsgsDone - v.Adopted
+		})
+	}
+}
+
+func maxI(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// shotResult builds the fixture ResultMsg for the Results screenshots.
+func shotResult(view string) *ResultMsg {
+	r := &ResultMsg{
+		RunID:      "20260718-093012-4f2a",
+		WorkerID:   "ferry:70210",
+		ResultsCSV: "./logs/results.csv",
+		SessionLog: "./logs/session.log",
+		Runtime:    5520,
+		Res:        engine.RunResult{Counts: map[string]int{}},
+	}
+	switch view {
+	case "results-nothing":
+		r.Runtime = 9
+	case "results-warnings":
+		r.FailedCSV = "./logs/failed_messages.csv"
+		r.Res.Outstanding = 8
+		mk := func(folder string, uid uint32, subj, sender, ftype, reason string, size int64) state.FailedRow {
+			return state.FailedRow{Mailbox: "user3@example.org", Folder: folder,
+				SrcUID: uid, Subject: subj, Sender: sender, FType: ftype,
+				Reason: reason, Size: size, FailCount: 3, Status: "FAILED"}
+		}
+		r.Res.FailedRegistry = []state.FailedRow{
+			mk("Archive", 4188, "=?utf-8?B?UsOpc3Vtw6kgb2YgUTMgcGxhbnM=?=", "pat@example.com",
+				"CONNECTION_RESET", "connection dies on APPEND", 24<<20),
+			mk("Archive", 4191, "Large design bundle (print masters)", "kim@example.com",
+				"APPEND_NO", "APPEND: NO APPEND failed", 31<<20),
+			mk("Archive", 4204, "=?utf-8?Q?Invoice_=E2=80=93_July?=", "billing@example.net",
+				"APPEND_NO", "APPEND: NO APPEND failed", 240<<10),
+			mk("Archive", 4207, "Weekly report w29", "ops@example.net",
+				"APPEND_NO", "APPEND: NO APPEND failed", 88<<10),
+			mk("Archive", 4211, "Site photos — final set", "site@example.org",
+				"APPEND_NO", "APPEND: NO APPEND failed", 18<<20),
+			mk("INBOX", 5102, "Contract counter-signed", "legal@example.net",
+				"APPEND_NO", "APPEND: NO APPEND failed", 3<<20),
+			mk("INBOX", 5188, "=?utf-8?Q?Re:_Freight_=E2=80=93_ETA?=", "cargo@example.net",
+				"APPEND_NO", "APPEND: NO APPEND failed", 55<<10),
+			mk("INBOX", 5201, "Renovation quote v4", "quotes@example.com",
+				"APPEND_NO", "APPEND: NO APPEND failed", 5<<20),
+		}
+	}
+	return r
 }
