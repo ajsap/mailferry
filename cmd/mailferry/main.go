@@ -40,6 +40,7 @@ import (
 	"github.com/ajsap/mailferry/v2/internal/progress"
 	"github.com/ajsap/mailferry/v2/internal/report"
 	"github.com/ajsap/mailferry/v2/internal/state"
+	"github.com/ajsap/mailferry/v2/internal/termstate"
 	"github.com/ajsap/mailferry/v2/internal/tui"
 	"github.com/ajsap/mailferry/v2/internal/util"
 )
@@ -48,14 +49,18 @@ func termInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() {
+	code := run(os.Args[1:])
+	termstate.Snapshot("pre-exit")
+	os.Exit(code)
+}
 
 var commands = map[string]bool{"run": true, "resume": true, "check": true,
 	"validate": true, "doctor": true, "benchmark": true, "init": true,
 	"import-state": true, "capabilities": true, "verify": true, "compact": true,
 	"changelog": true, "roadmap": true, "status": true, "failed": true,
 	"retry-failed": true, "config": true, "version": true, "about": true,
-	"dedup": true, "attach": true}
+	"dedup": true, "attach": true, "term-diag": true}
 
 // bootCfg is the file-configured baseline every command starts from.
 // mailferry.toml: sensible defaults that just work; the file only exists so
@@ -128,6 +133,21 @@ func bootstrapConfig(argv []string) []string {
 }
 
 func run(argv []string) int {
+	// BEFORE the first byte of output: never print into a broken terminal.
+	// A previous full-screen program (any program) that died in raw mode
+	// leaves the tty without newline translation — every "\n" would then
+	// render as a stair-step, starting with our own banner, and a plain
+	// capture/restore would preserve that damage forever. Repair the
+	// cooked-mode flags first; every later capture then snapshots the
+	// SANE state, so no exit path can hand the poison back to the shell.
+	termstate.Snapshot("entry")
+	if repairs := termstate.Sanitize(); len(repairs) > 0 {
+		termstate.Snapshot("post-sanitise", repairs...)
+		fmt.Fprintf(os.Stderr, "note: repaired inherited terminal state (%s) — "+
+			"a previous full-screen program exited uncleanly\n", strings.Join(repairs, " "))
+	} else {
+		termstate.Snapshot("post-sanitise")
+	}
 	if len(argv) > 0 && (argv[0] == "--about" || argv[0] == "about") {
 		fmt.Print(identity.AboutText())
 		return 0
@@ -197,6 +217,8 @@ func run(argv []string) int {
 		return cmdDedup(rest)
 	case "attach":
 		return cmdAttach(rest)
+	case "term-diag":
+		return cmdTermDiag(rest)
 	case "run", "resume", "check", "validate":
 		return cmdRun(cmd, rest)
 	}
@@ -223,6 +245,8 @@ Usage:
   mailferry verify CSV           compare per-folder counts: source vs destination vs state
   mailferry capabilities HOST PORT   probe a server's capabilities
   mailferry doctor               local environment self-test (no servers contacted)
+  mailferry term-diag            terminal output self-test (no servers, no data);
+                                 MAILFERRY_TERM_DIAG=FILE records termios stages
   mailferry benchmark            loopback throughput benchmark (in-process servers)
   mailferry compact [--db PATH]  prune per-message rows for completed folders
   mailferry import-state FILE    import the old wrapper's migration.state
@@ -588,6 +612,7 @@ func cmdRun(cmd string, rest []string) int {
 		fmt.Println("Note: >20 concurrent mailboxes — some servers throttle or cap simultaneous " +
 			"IMAP logins per account/IP. Lower --workers if you see auth/connection errors.")
 	}
+	termstate.Snapshot("pre-banner")
 	fmt.Println(identity.BannerLine())
 	fmt.Println(identity.Slogan)
 	fmt.Println()
@@ -595,6 +620,7 @@ func cmdRun(cmd string, rest []string) int {
 		len(specs), cfg.Workers, stats.DBPath)
 	fmt.Printf("Run %s · worker %s — multiple MailFerry processes may share this "+
 		"State Database safely\n", cfg.RunID, state.ShortWorker(state.LeaseOwnerID()))
+	termstate.Snapshot("post-banner")
 	if cfg.DryRun {
 		fmt.Println(progress.C("DRY RUN — planning and scanning only; nothing will be "+
 			"written to either server or the State Database.", "yellow"))
@@ -636,6 +662,7 @@ func cmdRun(cmd string, rest []string) int {
 		res.Counts["SUCCESS"], res.Counts["WARNINGS"], res.Counts["PARTIAL"],
 		res.Counts["FAILED"], res.Counts["STALE"], res.Counts["CANCELLED"],
 		map[bool]string{true: " (interrupted)"}[interrupted]))
+	termstate.Snapshot("pre-report")
 	report.PrintSummary(snap, resultsPath, cfg, runtimeS, interrupted, progress.C)
 	if n := res.Counts["REMOTE"]; n > 0 {
 		fmt.Println(progress.C(fmt.Sprintf("Handled by other workers : %d mailbox(es) were "+
@@ -679,11 +706,17 @@ const graceSeconds = 6 // bounded escalation after a graceful stop request
 // weakening the hard-stop fix. The restorer also re-enables cursor +
 // primary screen and disables mouse reporting defensively; those
 // sequences are idempotent no-ops on an already-clean terminal.
+//
+// Because termstate.Sanitize runs before any output, the state captured
+// here is always a SANE cooked state — restoring it can never hand a
+// poisoned terminal back to the shell (the v2.0.1 defect class).
 func captureTerminal() func() {
 	fd := int(os.Stdin.Fd())
 	st, err := term.GetState(fd)
 	if err != nil {
-		return func() {}
+		return func() {
+			fmt.Fprint(os.Stdout, "\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?25h\x1b[0m")
+		}
 	}
 	return func() {
 		_ = term.Restore(fd, st)
@@ -750,9 +783,11 @@ func runInteractive(ctx context.Context, cancel context.CancelFunc,
 	model := tui.New(stats, bus, gracefulStop, hardStop,
 		time.Duration(cfg.RefreshMS)*time.Millisecond, done)
 	restoreTerm := captureTerminal()
+	termstate.Snapshot("pre-tui")
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, runUIErr := p.Run()
 	restoreTerm() // guarantee: cooked mode + primary screen on EVERY path
+	termstate.Snapshot("post-tui")
 	if runUIErr != nil {
 		// TUI failed: never abort the migration — fall back to waiting headless
 		fmt.Fprintln(os.Stderr, "note: TUI unavailable (", runUIErr, ") — continuing headless")

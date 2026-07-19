@@ -12,7 +12,7 @@ binary speaks IMAP directly to both servers, streams messages
 source-to-destination with bounded memory, and records per-message state
 in an SQLite database so every run is resumable and duplicate-free.
 
-> **Release status: `v2.0.1` (stable).**
+> **Release status: `v2.0.2` (stable).**
 > v1.0.0 was the original Python implementation; development continued
 > unreleased after it and served as the behavioural reference for the
 > complete native Go rewrite that is v2, released as stable v2.0.0
@@ -101,8 +101,8 @@ checksum, make it executable, run it. There is nothing else to install.
 
 ```sh
 shasum -a 256 -c SHA256SUMS          # verify (macOS: shasum, Linux: sha256sum)
-chmod +x mailferry-v2.0.1-darwin-arm64
-./mailferry-v2.0.1-darwin-arm64 version
+chmod +x mailferry-v2.0.2-darwin-arm64
+./mailferry-v2.0.2-darwin-arm64 version
 ```
 
 Targets: `darwin-arm64` (all Apple Silicon), `darwin-amd64` (Intel Macs),
@@ -258,6 +258,17 @@ state.
 - Inspect and manage: `mailferry failed` (list/export `--json`/`--csv`,
   silence with `--ignore`), `mailferry retry-failed` re-queues entries;
   successes become RECOVERED.
+
+## Troubleshooting the terminal
+
+If shell output ever appears as a "stair-step" (each line starting
+where the previous one ended), a previously crashed full-screen program
+left the terminal without newline post-processing. MailFerry v2.0.2+
+repairs this automatically before printing anything (a one-line
+`note: repaired inherited terminal state (…)` says so) and always hands
+the terminal back sane. `mailferry term-diag` is a supported self-test
+(no servers, no data), and `MAILFERRY_TERM_DIAG=FILE` records termios
+flags at every lifecycle stage — flags only, never mailbox data.
 
 ## Known limitations
 

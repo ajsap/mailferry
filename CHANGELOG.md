@@ -13,6 +13,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notarised.
 - OAuth 2.0, MULTIAPPEND, QRESYNC, quarantine purge (v2.1.0).
 
+## [2.0.2] - 2026-07-19
+
+Patch release: terminal output now renders correctly even when the
+terminal arrives broken — the actual root cause of the reported macOS
+"stair-step" output. The defect was reproduced on real macOS arm64
+with v2.0.0/v2.0.1 and this fix was verified on that same environment
+before release.
+
+### Fixed
+
+- **Stair-step output (root cause)**: MailFerry emits ordinary "\n"
+  line output and relies on the terminal’s output post-processing
+  (OPOST/ONLCR) for carriage returns. A terminal left in a raw-ish
+  state by a previously crashed full-screen program — OPOST or ONLCR
+  disabled — renders every subsequent run as a stair-step from the very
+  first banner line, and the v2.0.1 capture/restore then PRESERVED that
+  inherited damage instead of healing it (it restored the poisoned
+  entry state verbatim, so the shell never recovered). MailFerry now
+  sanitises the cooked-mode flags BEFORE its first byte of output: the
+  `stty sane` newline subset (+OPOST +ONLCR +ICRNL +ICANON +ECHO +ISIG;
+  −OCRNL −ONOCR −ONLRET −INLCR −IGNCR) is repaired only when actually
+  broken and a one-line notice reports the repair. Every terminal
+  capture thereafter snapshots the SANE state, so no exit path can hand
+  a broken terminal back to the shell. Conservative by design:
+  already-sane terminals get no write at all, pipes/non-TTY output are
+  never touched, and TUI, headless, SSH/tmux/screen behaviour is
+  unchanged. Real-world verification: entry state `-opost` was repaired
+  (`+OPOST +ICRNL +ISIG`), every section rendered from column 1, and
+  the shell returned completely normal (`opost onlcr`).
+
+### Added
+
+- **`mailferry term-diag`** — supported terminal self-test: prints test
+  lines around a minimal alternate-screen stage; zero IMAP, network,
+  database or credential activity.
+- **`MAILFERRY_TERM_DIAG=FILE`** — records termios flags (OPOST ONLCR
+  OCRNL ONOCR ONLRET ICRNL INLCR IGNCR ICANON ECHO ISIG) at every
+  application lifecycle stage (entry, post-sanitise, banner, pre/post
+  TUI, report, exit) for field diagnosis. Flags only — never mailbox
+  data, addresses or credentials.
+- **PTY-level regression tests** that assert cursor/newline semantics
+  at the moment of every write: every rendered line must begin at
+  column 1 on clean AND pre-poisoned terminals, and a poisoned terminal
+  must end HEALED. Termios before/after equality is deliberately
+  asserted nowhere — v2.0.1 proved equality can pass while rendering
+  is broken.
+
 ## [2.0.1] - 2026-07-19
 
 Patch release: terminal-state restoration guarantee.
@@ -555,7 +602,8 @@ Engine.
   suite (34 checks).
 - Packaging: standalone `mailferry.pyz` (zipapp), source archive, wheel.
 
-[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/ajsap/mailferry/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/ajsap/mailferry/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/ajsap/mailferry/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.3...v2.0.0
 [2.0.0-rc.3]: https://github.com/ajsap/mailferry/compare/v2.0.0-rc.2...v2.0.0-rc.3

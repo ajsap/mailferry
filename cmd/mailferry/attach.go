@@ -30,6 +30,7 @@ import (
 	"github.com/ajsap/mailferry/v2/internal/paths"
 	"github.com/ajsap/mailferry/v2/internal/progress"
 	"github.com/ajsap/mailferry/v2/internal/state"
+	"github.com/ajsap/mailferry/v2/internal/termstate"
 	"github.com/ajsap/mailferry/v2/internal/tui"
 )
 
@@ -86,7 +87,9 @@ func cmdAttach(rest []string) int {
 	fmt.Println(identity.BannerLine())
 	model := tui.NewAttachModel(poller)
 	restoreTerm := captureTerminal()
-	defer restoreTerm() // same guarantee as the main TUI
+	defer termstate.Snapshot("post-tui-attach") // runs after the restore below
+	defer restoreTerm()                         // same guarantee as the main TUI
+	termstate.Snapshot("pre-tui-attach")
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		// The monitor is a pure reader; if the TUI cannot start, fall back to
